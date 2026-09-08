@@ -75,7 +75,7 @@ func TestStoreDocuments(t *testing.T) {
 	}
 
 	replacement := []byte(`{"name":"second"}`)
-	newRev, err := store.replaceDoc("db", "01950000-0000-7000-8000-000000000001", replacement)
+	newRev, err := store.replaceDoc("db", "01950000-0000-7000-8000-000000000001", replacement, matchCond{})
 	if err != nil {
 		t.Fatalf("replaceDoc() error = %v", err)
 	}
@@ -90,13 +90,13 @@ func TestStoreDocuments(t *testing.T) {
 		t.Errorf("getDoc() JSON = %s, want %s", doc.json, replacement)
 	}
 
-	if err := store.deleteDoc("db", "01950000-0000-7000-8000-000000000001"); err != nil {
+	if err := store.deleteDoc("db", "01950000-0000-7000-8000-000000000001", matchCond{}); err != nil {
 		t.Fatalf("deleteDoc() error = %v", err)
 	}
 	if _, err := store.getDoc("db", "01950000-0000-7000-8000-000000000001"); !errors.Is(err, errDocNotFound) {
 		t.Fatalf("getDoc() error = %v, want %v", err, errDocNotFound)
 	}
-	if err := store.deleteDoc("db", "01950000-0000-7000-8000-000000000001"); !errors.Is(err, errDocNotFound) {
+	if err := store.deleteDoc("db", "01950000-0000-7000-8000-000000000001", matchCond{}); !errors.Is(err, errDocNotFound) {
 		t.Fatalf("deleteDoc() error = %v, want %v", err, errDocNotFound)
 	}
 }

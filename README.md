@@ -25,8 +25,12 @@ xh POST localhost:8080/example/ name=KantanDB active:=true
 # Read a document using the returned ID.
 xh GET localhost:8080/example/01950000-0000-7000-8000-000000000001
 
-# Delete a document.
-xh DELETE localhost:8080/example/01950000-0000-7000-8000-000000000001
+# Replace a document if its ETag still matches.
+xh PUT localhost:8080/example/01950000-0000-7000-8000-000000000001 \
+  If-Match:'"0123456789abcdef0123456789abcdef"' name=Updated
+
+# Delete a document if it exists.
+xh DELETE localhost:8080/example/01950000-0000-7000-8000-000000000001 If-Match:\*
 
 # Delete a database.
 xh DELETE localhost:8080/example

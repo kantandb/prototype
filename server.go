@@ -48,6 +48,7 @@ func newHandler(store *store, maxBodyBytes int64) http.Handler {
 	router.DELETE("/:database", a.deleteDB)
 	router.POST("/:database/", a.createDoc)
 	router.GET("/:database/:id", a.getDoc)
+	router.PUT("/:database/:id", a.replaceDoc)
 	router.DELETE("/:database/:id", a.deleteDoc)
 
 	return router
@@ -221,14 +222,88 @@ func (a *api) getDoc(c *gin.Context) {
 	c.Data(http.StatusOK, "application/json", doc.json)
 }
 
+func (a *api) replaceDoc(c *gin.Context) {
+	if !isJSON(c.GetHeader("Content-Type")) {
+		writeError(c, http.StatusUnsupportedMediaType, "unsupported_media_type", "Content-Type must be application/json")
+
+		return
+	}
+	if !validDocPath(c) {
+		return
+	}
+
+	match, err := parseIfMatch(c.Request.Header.Values("If-Match"))
+	if err != nil {
+		writeError(c, http.StatusBadRequest, "invalid_if_match", "If-Match is invalid")
+
+		return
+	}
+
+	body, err := readBody(c.Request.Body, a.maxBodyBytes)
+	if errors.Is(err, errBodyTooLarge) {
+		writeError(c, http.StatusRequestEntityTooLarge, "content_too_large", "Request body exceeds the size limit")
+
+		return
+	}
+	if err != nil {
+		writeError(c, http.StatusBadRequest, "invalid_document", "Could not read document")
+
+		return
+	}
+
+	document, err := validateDoc(body, a.maxBodyBytes)
+	if errors.Is(err, errBodyTooLarge) {
+		writeError(c, http.StatusRequestEntityTooLarge, "content_too_large", "Document exceeds the size limit")
+
+		return
+	}
+	if err != nil {
+		writeError(c, http.StatusBadRequest, "invalid_document", "Document must be a JSON object")
+
+		return
+	}
+
+	rev, err := a.store.replaceDoc(c.Param("database"), c.Param("id"), document, match)
+	if errors.Is(err, errDocNotFound) {
+		writeError(c, http.StatusNotFound, "document_not_found", "Document does not exist")
+
+		return
+	}
+	if errors.Is(err, errPreconditionFailed) {
+		writeError(c, http.StatusPreconditionFailed, "precondition_failed", "If-Match precondition failed")
+
+		return
+	}
+	if err != nil {
+		writeError(c, http.StatusInternalServerError, "internal_error", "Could not replace document")
+
+		return
+	}
+
+	c.Header("ETag", formatETag(rev))
+	c.Data(http.StatusOK, "application/json", document)
+}
+
 func (a *api) deleteDoc(c *gin.Context) {
 	if !validDocPath(c) {
 		return
 	}
 
-	err := a.store.deleteDoc(c.Param("database"), c.Param("id"))
+	match, err := parseIfMatch(c.Request.Header.Values("If-Match"))
+	if err != nil {
+		writeError(c, http.StatusBadRequest, "invalid_if_match", "If-Match is invalid")
+
+		return
+	}
+
+	err = a.store.deleteDoc(c.Param("database"), c.Param("id"), match)
 	if errors.Is(err, errDocNotFound) {
 		writeError(c, http.StatusNotFound, "document_not_found", "Document does not exist")
+
+		return
+	}
+	if errors.Is(err, errPreconditionFailed) {
+		writeError(c, http.StatusPreconditionFailed, "precondition_failed", "If-Match precondition failed")
 
 		return
 	}

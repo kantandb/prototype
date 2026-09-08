@@ -10,10 +10,11 @@ import (
 )
 
 var (
-	errDBExists    = errors.New("database exists")
-	errDBNotFound  = errors.New("database not found")
-	errDocExists   = errors.New("document exists")
-	errDocNotFound = errors.New("document not found")
+	errDBExists           = errors.New("database exists")
+	errDBNotFound         = errors.New("database not found")
+	errDocExists          = errors.New("document exists")
+	errDocNotFound        = errors.New("document not found")
+	errPreconditionFailed = errors.New("precondition failed")
 )
 
 var (
@@ -169,7 +170,7 @@ func (s *store) getDoc(database, id string) (storedDoc, error) {
 	return s.readDoc(docKey(database, id))
 }
 
-func (s *store) replaceDoc(database, id string, json []byte) (revision, error) {
+func (s *store) replaceDoc(database, id string, json []byte, match matchCond) (revision, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -177,6 +178,9 @@ func (s *store) replaceDoc(database, id string, json []byte) (revision, error) {
 	current, err := s.readDoc(key)
 	if err != nil {
 		return revision{}, err
+	}
+	if !matchRevision(match, current.revision) {
+		return revision{}, errPreconditionFailed
 	}
 
 	rev, err := makeRevision(&current.revision)
@@ -190,17 +194,17 @@ func (s *store) replaceDoc(database, id string, json []byte) (revision, error) {
 	return rev, nil
 }
 
-func (s *store) deleteDoc(database, id string) error {
+func (s *store) deleteDoc(database, id string, match matchCond) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	key := docKey(database, id)
-	exists, err := s.has(key)
+	current, err := s.readDoc(key)
 	if err != nil {
-		return fmt.Errorf("checking document: %w", err)
+		return err
 	}
-	if !exists {
-		return errDocNotFound
+	if !matchRevision(match, current.revision) {
+		return errPreconditionFailed
 	}
 
 	if err := s.db.Delete(key, pebble.Sync); err != nil {
@@ -208,6 +212,10 @@ func (s *store) deleteDoc(database, id string) error {
 	}
 
 	return nil
+}
+
+func matchRevision(match matchCond, current revision) bool {
+	return !match.set || match.wildcard || match.revision == current
 }
 
 func (s *store) hasDB(name string) (bool, error) {
