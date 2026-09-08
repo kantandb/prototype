@@ -1,0 +1,35 @@
+[tools]
+go = "1.26"
+
+[tasks.build]
+run = "go build -o kantan ./..."
+
+[tasks.test]
+run = "go test ./..."
+
+[tasks.lint]
+run = "golangci-lint run ./..."
+
+[tasks.fmt-check]
+run = '''
+files="$(gofmt -l .)"
+if [ -n "$files" ]; then
+  echo "$files"
+  exit 1
+fi
+'''
+
+[tasks.vet]
+run = "go vet ./..."
+
+[tasks.check]
+run = [
+  "mise run fmt-check",
+  "mise run vet",
+  "mise run build",
+  "mise run test",
+  "mise run lint",
+]
+
+[tasks.clean]
+run = "go clean"
