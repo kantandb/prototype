@@ -45,7 +45,7 @@ func run(ctx context.Context, cfg config, log *slog.Logger) (runErr error) {
 
 	srv := &http.Server{
 		Addr:              cfg.addr,
-		Handler:           newHandler(store),
+		Handler:           newHandler(store, cfg.maxBodyBytes),
 		ReadHeaderTimeout: 5 * time.Second,
 		IdleTimeout:       60 * time.Second,
 	}

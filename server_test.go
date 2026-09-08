@@ -21,7 +21,7 @@ func TestHealth(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
 	res := httptest.NewRecorder()
-	newHandler(store).ServeHTTP(res, req)
+	newHandler(store, defaultMaxBodyBytes).ServeHTTP(res, req)
 
 	if res.Code != http.StatusOK {
 		t.Errorf("status = %d, want %d", res.Code, http.StatusOK)

@@ -7,4 +7,18 @@ mise run build
 ./kantan -addr :8080 -data data -max-body-bytes 1048576
 ```
 
-Check health at `GET /healthz`.
+## HTTP examples
+
+```sh
+# Check health.
+xh GET localhost:8080/healthz
+
+# Create a database.
+xh POST localhost:8080/ name=example
+
+# List databases.
+xh GET localhost:8080/
+
+# Delete a database.
+xh DELETE localhost:8080/example
+```
