@@ -3,16 +3,15 @@ package main
 import (
 	"net/http"
 
-	"github.com/cockroachdb/pebble"
 	"github.com/gin-gonic/gin"
 )
 
 type api struct {
-	db *pebble.DB
+	store *store
 }
 
-func newHandler(db *pebble.DB) http.Handler {
-	a := &api{db: db}
+func newHandler(store *store) http.Handler {
+	a := &api{store: store}
 
 	router := gin.New()
 	router.Use(gin.Recovery())
@@ -22,7 +21,7 @@ func newHandler(db *pebble.DB) http.Handler {
 }
 
 func (a *api) health(c *gin.Context) {
-	_ = a.db.Metrics()
+	_ = a.store.db.Metrics()
 
 	c.JSON(http.StatusOK, gin.H{"status": "ok"})
 }

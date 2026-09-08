@@ -4,26 +4,24 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
-
-	"github.com/cockroachdb/pebble"
 )
 
 func TestHealth(t *testing.T) {
 	t.Parallel()
 
-	db, err := pebble.Open(t.TempDir(), &pebble.Options{})
+	store, err := openStore(t.TempDir())
 	if err != nil {
-		t.Fatalf("pebble.Open() error = %v", err)
+		t.Fatalf("openStore() error = %v", err)
 	}
 	t.Cleanup(func() {
-		if err := db.Close(); err != nil {
-			t.Errorf("DB.Close() error = %v", err)
+		if err := store.close(); err != nil {
+			t.Errorf("store.close() error = %v", err)
 		}
 	})
 
 	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
 	res := httptest.NewRecorder()
-	newHandler(db).ServeHTTP(res, req)
+	newHandler(store).ServeHTTP(res, req)
 
 	if res.Code != http.StatusOK {
 		t.Errorf("status = %d, want %d", res.Code, http.StatusOK)

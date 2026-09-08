@@ -10,8 +10,6 @@ import (
 	"os/signal"
 	"syscall"
 	"time"
-
-	"github.com/cockroachdb/pebble"
 )
 
 const shutdownTimeout = 10 * time.Second
@@ -35,19 +33,19 @@ func main() {
 }
 
 func run(ctx context.Context, cfg config, log *slog.Logger) (runErr error) {
-	db, err := pebble.Open(cfg.dataPath, &pebble.Options{})
+	store, err := openStore(cfg.dataPath)
 	if err != nil {
 		return fmt.Errorf("opening storage: %w", err)
 	}
 	defer func() {
-		if err := db.Close(); err != nil {
-			runErr = errors.Join(runErr, fmt.Errorf("closing storage: %w", err))
+		if err := store.close(); err != nil {
+			runErr = errors.Join(runErr, err)
 		}
 	}()
 
 	srv := &http.Server{
 		Addr:              cfg.addr,
-		Handler:           newHandler(db),
+		Handler:           newHandler(store),
 		ReadHeaderTimeout: 5 * time.Second,
 		IdleTimeout:       60 * time.Second,
 	}
