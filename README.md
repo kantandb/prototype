@@ -16,8 +16,8 @@ xh GET localhost:8080/healthz
 # Create a database.
 xh POST localhost:8080/ name=example
 
-# List databases.
-xh GET localhost:8080/
+# List databases, optionally after a cursor.
+xh GET localhost:8080/ limit==100 cursor==example
 
 # Create a document.
 xh POST localhost:8080/example/ name=KantanDB active:=true

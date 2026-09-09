@@ -24,12 +24,28 @@ func TestStoreDatabases(t *testing.T) {
 		t.Fatalf("createDB() error = %v, want %v", err, errDBExists)
 	}
 
-	names, err := store.listDBs()
+	names, err := store.listDBs(100, "")
 	if err != nil {
 		t.Fatalf("listDBs() error = %v", err)
 	}
 	if want := []string{"alpha", "beta"}; !slices.Equal(names, want) {
 		t.Errorf("listDBs() = %v, want %v", names, want)
+	}
+
+	names, err = store.listDBs(1, "alpha")
+	if err != nil {
+		t.Fatalf("listDBs() with cursor error = %v", err)
+	}
+	if want := []string{"beta"}; !slices.Equal(names, want) {
+		t.Errorf("listDBs() with cursor = %v, want %v", names, want)
+	}
+
+	names, err = store.listDBs(1, "beta")
+	if err != nil {
+		t.Fatalf("listDBs() final page error = %v", err)
+	}
+	if len(names) != 0 {
+		t.Errorf("listDBs() final page = %v, want empty", names)
 	}
 
 	if err := store.deleteDB("alpha"); err != nil {
@@ -255,7 +271,7 @@ func TestStoreRejectsCorruption(t *testing.T) {
 	if err := store.db.Set(dbKey("bad"), []byte{0xff}, pebble.Sync); err != nil {
 		t.Fatalf("DB.Set() error = %v", err)
 	}
-	if _, err := store.listDBs(); err == nil {
+	if _, err := store.listDBs(100, ""); err == nil {
 		t.Fatal("listDBs() error = nil, want corruption error")
 	}
 	if _, err := store.createDoc("bad", "id", []byte(`{}`)); err == nil {

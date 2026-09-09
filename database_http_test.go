@@ -41,6 +41,51 @@ func TestDatabaseLifecycleHTTP(t *testing.T) {
 	checkResponse(t, res, http.StatusNotFound, `{"error":{"code":"database_not_found","message":"Database does not exist"}}`)
 }
 
+func TestListDatabasesPaginationHTTP(t *testing.T) {
+	t.Parallel()
+
+	server := newTestServer(t, defaultMaxBodyBytes)
+	for _, name := range []string{"gamma", "alpha", "beta"} {
+		res := sendRequest(t, server, http.MethodPost, "/", `{"name":"`+name+`"}`, "application/json")
+		checkResponse(t, res, http.StatusCreated, `{"name":"`+name+`"}`)
+	}
+
+	res := sendRequest(t, server, http.MethodGet, "/?limit=2", "", "")
+	checkResponse(t, res, http.StatusOK, `{"databases":["alpha","beta"]}`)
+
+	res = sendRequest(t, server, http.MethodGet, "/?limit=1&cursor=beta", "", "")
+	checkResponse(t, res, http.StatusOK, `{"databases":["gamma"]}`)
+
+	res = sendRequest(t, server, http.MethodGet, "/?cursor=gamma", "", "")
+	checkResponse(t, res, http.StatusOK, `{"databases":[]}`)
+}
+
+func TestListDatabasesValidationHTTP(t *testing.T) {
+	t.Parallel()
+
+	server := newTestServer(t, defaultMaxBodyBytes)
+	tests := []struct {
+		path string
+		code string
+	}{
+		{path: "/?limit=", code: "invalid_limit"},
+		{path: "/?limit=0", code: "invalid_limit"},
+		{path: "/?limit=1001", code: "invalid_limit"},
+		{path: "/?limit=none", code: "invalid_limit"},
+		{path: "/?cursor=Bad", code: "invalid_cursor"},
+	}
+	for _, tt := range tests {
+		res := sendRequest(t, server, http.MethodGet, tt.path, "", "")
+		body := readResponse(t, res)
+		if res.StatusCode != http.StatusBadRequest {
+			t.Errorf("GET %s status = %d, want %d; body = %s", tt.path, res.StatusCode, http.StatusBadRequest, body)
+		}
+		if !strings.Contains(body, `"code":"`+tt.code+`"`) {
+			t.Errorf("GET %s body = %s, want code %q", tt.path, body, tt.code)
+		}
+	}
+}
+
 func TestCreateDatabaseValidationHTTP(t *testing.T) {
 	t.Parallel()
 

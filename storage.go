@@ -75,7 +75,7 @@ func (s *store) createDB(name string) error {
 	return nil
 }
 
-func (s *store) listDBs() (names []string, listErr error) {
+func (s *store) listDBs(limit int, cursor string) (names []string, listErr error) {
 	iter, err := s.db.NewIter(&pebble.IterOptions{
 		LowerBound: dbPrefix,
 		UpperBound: prefixEnd(dbPrefix),
@@ -89,7 +89,16 @@ func (s *store) listDBs() (names []string, listErr error) {
 		}
 	}()
 
-	for iter.First(); iter.Valid(); iter.Next() {
+	valid := iter.First()
+	if cursor != "" {
+		key := dbKey(cursor)
+		valid = iter.SeekGE(key)
+		if valid && bytes.Equal(iter.Key(), key) {
+			valid = iter.Next()
+		}
+	}
+
+	for ; valid && len(names) < limit; valid = iter.Next() {
 		name := string(iter.Key()[len(dbPrefix):])
 		if !validDBRecord(iter.Value()) {
 			return nil, fmt.Errorf("%w: database %q", errCorruptData, name)

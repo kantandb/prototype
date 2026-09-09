@@ -175,7 +175,12 @@ func (a *api) createDB(c *gin.Context) {
 }
 
 func (a *api) listDBs(c *gin.Context) {
-	names, err := a.store.listDBs()
+	limit, cursor, ok := parseListQuery(c, validateName)
+	if !ok {
+		return
+	}
+
+	names, err := a.store.listDBs(limit, cursor)
 	if err != nil {
 		a.fail(c, "list databases", err)
 
@@ -196,24 +201,9 @@ func (a *api) listDocs(c *gin.Context) {
 		return
 	}
 
-	limit := defaultListLimit
-	if value, ok := c.GetQuery("limit"); ok {
-		parsed, err := strconv.Atoi(value)
-		if err != nil || parsed < 1 || parsed > maxListLimit {
-			writeError(c, http.StatusBadRequest, "invalid_limit", "Limit must be between 1 and 1000")
-
-			return
-		}
-		limit = parsed
-	}
-
-	cursor := c.Query("cursor")
-	if cursor != "" {
-		if err := validateID(cursor); err != nil {
-			writeError(c, http.StatusBadRequest, "invalid_cursor", "Cursor is invalid")
-
-			return
-		}
+	limit, cursor, ok := parseListQuery(c, validateID)
+	if !ok {
+		return
 	}
 
 	ids, err := a.store.listDocs(database, limit, cursor)
@@ -232,6 +222,30 @@ func (a *api) listDocs(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, docList{Documents: ids})
+}
+
+func parseListQuery(c *gin.Context, validateCursor func(string) error) (int, string, bool) {
+	limit := defaultListLimit
+	if value, ok := c.GetQuery("limit"); ok {
+		parsed, err := strconv.Atoi(value)
+		if err != nil || parsed < 1 || parsed > maxListLimit {
+			writeError(c, http.StatusBadRequest, "invalid_limit", "Limit must be between 1 and 1000")
+
+			return 0, "", false
+		}
+		limit = parsed
+	}
+
+	cursor := c.Query("cursor")
+	if cursor != "" {
+		if err := validateCursor(cursor); err != nil {
+			writeError(c, http.StatusBadRequest, "invalid_cursor", "Cursor is invalid")
+
+			return 0, "", false
+		}
+	}
+
+	return limit, cursor, true
 }
 
 func (a *api) deleteDB(c *gin.Context) {
