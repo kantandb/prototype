@@ -15,6 +15,8 @@ var (
 	errDocExists          = errors.New("document exists")
 	errDocNotFound        = errors.New("document not found")
 	errPreconditionFailed = errors.New("precondition failed")
+	errCorruptData        = errors.New("corrupt stored data")
+	errStoreUnavailable   = errors.New("storage unavailable")
 )
 
 var (
@@ -66,7 +68,7 @@ func (s *store) createDB(name string) error {
 	}
 
 	if err := s.db.Set(dbKey(name), []byte{recordVersion}, pebble.Sync); err != nil {
-		return fmt.Errorf("writing database: %w", err)
+		return wrapStore("writing database", err)
 	}
 
 	return nil
@@ -78,24 +80,24 @@ func (s *store) listDBs() (names []string, listErr error) {
 		UpperBound: prefixEnd(dbPrefix),
 	})
 	if err != nil {
-		return nil, fmt.Errorf("creating database iterator: %w", err)
+		return nil, wrapStore("creating database iterator", err)
 	}
 	defer func() {
 		if err := iter.Close(); err != nil {
-			listErr = errors.Join(listErr, fmt.Errorf("closing database iterator: %w", err))
+			listErr = errors.Join(listErr, wrapStore("closing database iterator", err))
 		}
 	}()
 
 	for iter.First(); iter.Valid(); iter.Next() {
 		name := string(iter.Key()[len(dbPrefix):])
 		if !validDBRecord(iter.Value()) {
-			return nil, fmt.Errorf("decoding database %q: invalid database record", name)
+			return nil, fmt.Errorf("%w: database %q", errCorruptData, name)
 		}
 
 		names = append(names, name)
 	}
 	if err := iter.Error(); err != nil {
-		return nil, fmt.Errorf("iterating databases: %w", err)
+		return nil, wrapStore("iterating databases", err)
 	}
 
 	return names, nil
@@ -116,19 +118,19 @@ func (s *store) deleteDB(name string) (deleteErr error) {
 	batch := s.db.NewBatch()
 	defer func() {
 		if err := batch.Close(); err != nil {
-			deleteErr = errors.Join(deleteErr, fmt.Errorf("closing deletion batch: %w", err))
+			deleteErr = errors.Join(deleteErr, wrapStore("closing deletion batch", err))
 		}
 	}()
 
 	if err := batch.Delete(dbKey(name), nil); err != nil {
-		return fmt.Errorf("queuing database deletion: %w", err)
+		return wrapStore("queuing database deletion", err)
 	}
 	prefix := docsPrefix(name)
 	if err := batch.DeleteRange(prefix, prefixEnd(prefix), nil); err != nil {
-		return fmt.Errorf("queuing document deletion: %w", err)
+		return wrapStore("queuing document deletion", err)
 	}
 	if err := batch.Commit(pebble.Sync); err != nil {
-		return fmt.Errorf("committing database deletion: %w", err)
+		return wrapStore("committing database deletion", err)
 	}
 
 	return nil
@@ -160,7 +162,7 @@ func (s *store) createDoc(database, id string, json []byte) (revision, error) {
 		return revision{}, err
 	}
 	if err := s.db.Set(key, encodeDoc(json, rev), pebble.Sync); err != nil {
-		return revision{}, fmt.Errorf("writing document: %w", err)
+		return revision{}, wrapStore("writing document", err)
 	}
 
 	return rev, nil
@@ -188,7 +190,7 @@ func (s *store) replaceDoc(database, id string, json []byte, match matchCond) (r
 		return revision{}, err
 	}
 	if err := s.db.Set(key, encodeDoc(json, rev), pebble.Sync); err != nil {
-		return revision{}, fmt.Errorf("writing document: %w", err)
+		return revision{}, wrapStore("writing document", err)
 	}
 
 	return rev, nil
@@ -216,7 +218,7 @@ func (s *store) patchDoc(database, id string, match matchCond, apply func([]byte
 		return storedDoc{}, err
 	}
 	if err := s.db.Set(key, encodeDoc(json, rev), pebble.Sync); err != nil {
-		return storedDoc{}, fmt.Errorf("writing document: %w", err)
+		return storedDoc{}, wrapStore("writing document", err)
 	}
 
 	return storedDoc{json: json, revision: rev}, nil
@@ -236,7 +238,7 @@ func (s *store) deleteDoc(database, id string, match matchCond) error {
 	}
 
 	if err := s.db.Delete(key, pebble.Sync); err != nil {
-		return fmt.Errorf("deleting document: %w", err)
+		return wrapStore("deleting document", err)
 	}
 
 	return nil
@@ -252,13 +254,13 @@ func (s *store) hasDB(name string) (bool, error) {
 		return false, nil
 	}
 	if err != nil {
-		return false, err
+		return false, wrapStore("reading database", err)
 	}
 	if !validDBRecord(value) {
-		err = errors.New("invalid database record")
+		err = fmt.Errorf("%w: database %q", errCorruptData, name)
 	}
 	if closeErr := closer.Close(); closeErr != nil {
-		err = errors.Join(err, fmt.Errorf("closing value: %w", closeErr))
+		err = errors.Join(err, wrapStore("closing database value", closeErr))
 	}
 
 	return true, err
@@ -270,10 +272,10 @@ func (s *store) has(key []byte) (bool, error) {
 		return false, nil
 	}
 	if err != nil {
-		return false, err
+		return false, wrapStore("reading value", err)
 	}
 	if err := closer.Close(); err != nil {
-		return false, fmt.Errorf("closing value: %w", err)
+		return false, wrapStore("closing value", err)
 	}
 
 	return true, nil
@@ -285,17 +287,17 @@ func (s *store) readDoc(key []byte) (doc storedDoc, readErr error) {
 		return storedDoc{}, errDocNotFound
 	}
 	if err != nil {
-		return storedDoc{}, fmt.Errorf("reading document: %w", err)
+		return storedDoc{}, wrapStore("reading document", err)
 	}
 	defer func() {
 		if err := closer.Close(); err != nil {
-			readErr = errors.Join(readErr, fmt.Errorf("closing document value: %w", err))
+			readErr = errors.Join(readErr, wrapStore("closing document value", err))
 		}
 	}()
 
 	doc, err = decodeDoc(value)
 	if err != nil {
-		return storedDoc{}, fmt.Errorf("decoding document: %w", err)
+		return storedDoc{}, fmt.Errorf("%w: %v", errCorruptData, err)
 	}
 
 	return doc, nil
@@ -358,6 +360,19 @@ func appendKey(prefix []byte, value string) []byte {
 	key = append(key, prefix...)
 
 	return append(key, value...)
+}
+
+func wrapStore(action string, err error) error {
+	kind := errStoreUnavailable
+	if pebble.IsCorruptionError(err) {
+		kind = errCorruptData
+	}
+
+	return errors.Join(kind, fmt.Errorf("%s: %w", action, err))
+}
+
+func isStoreUnavailable(err error) bool {
+	return errors.Is(err, errStoreUnavailable) || errors.Is(err, pebble.ErrClosed)
 }
 
 func prefixEnd(prefix []byte) []byte {

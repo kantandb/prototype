@@ -4,9 +4,13 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
+	"log/slog"
 	"mime"
 	"net/http"
+	"runtime/debug"
+	"sync/atomic"
 
 	"github.com/gin-gonic/gin"
 )
@@ -14,6 +18,8 @@ import (
 type api struct {
 	store        *store
 	maxBodyBytes int64
+	log          *slog.Logger
+	stopping     atomic.Bool
 }
 
 type dbRequest struct {
@@ -38,10 +44,19 @@ type errorBody struct {
 }
 
 func newHandler(store *store, maxBodyBytes int64) http.Handler {
-	a := &api{store: store, maxBodyBytes: maxBodyBytes}
+	return newAPI(store, maxBodyBytes, slog.New(slog.DiscardHandler)).handler()
+}
 
+func newAPI(store *store, maxBodyBytes int64, log *slog.Logger) *api {
+	return &api{store: store, maxBodyBytes: maxBodyBytes, log: log}
+}
+
+func (a *api) handler() http.Handler {
 	router := gin.New()
-	router.Use(gin.Recovery())
+	router.HandleMethodNotAllowed = true
+	router.RedirectFixedPath = false
+	router.RedirectTrailingSlash = false
+	router.Use(a.recover, a.rejectStopping)
 	router.GET("/healthz", a.health)
 	router.POST("/", a.createDB)
 	router.GET("/", a.listDBs)
@@ -51,8 +66,50 @@ func newHandler(store *store, maxBodyBytes int64) http.Handler {
 	router.PUT("/:database/:id", a.replaceDoc)
 	router.PATCH("/:database/:id", a.patchDoc)
 	router.DELETE("/:database/:id", a.deleteDoc)
+	router.NoRoute(func(c *gin.Context) {
+		writeError(c, http.StatusNotFound, "route_not_found", "Route does not exist")
+	})
+	router.NoMethod(func(c *gin.Context) {
+		writeError(c, http.StatusMethodNotAllowed, "method_not_allowed", "Method is not allowed")
+	})
 
 	return router
+}
+
+func (a *api) stop() {
+	a.stopping.Store(true)
+}
+
+func (a *api) recover(c *gin.Context) {
+	defer func() {
+		value := recover()
+		if value == nil {
+			return
+		}
+
+		err, ok := value.(error)
+		if !ok {
+			err = fmt.Errorf("panic: %v", value)
+		}
+		a.log.Error("request panic", "method", c.Request.Method, "path", c.Request.URL.Path, "error", err, "stack", string(debug.Stack()))
+		if !c.Writer.Written() {
+			writeFailure(c, err)
+		}
+		c.Abort()
+	}()
+
+	c.Next()
+}
+
+func (a *api) rejectStopping(c *gin.Context) {
+	if a.stopping.Load() {
+		writeError(c, http.StatusServiceUnavailable, "service_unavailable", "Service is unavailable")
+		c.Abort()
+
+		return
+	}
+
+	c.Next()
 }
 
 func (a *api) health(c *gin.Context) {
@@ -97,7 +154,7 @@ func (a *api) createDB(c *gin.Context) {
 
 		return
 	} else if err != nil {
-		writeError(c, http.StatusInternalServerError, "internal_error", "Could not create database")
+		a.fail(c, "create database", err)
 
 		return
 	}
@@ -109,7 +166,7 @@ func (a *api) createDB(c *gin.Context) {
 func (a *api) listDBs(c *gin.Context) {
 	names, err := a.store.listDBs()
 	if err != nil {
-		writeError(c, http.StatusInternalServerError, "internal_error", "Could not list databases")
+		a.fail(c, "list databases", err)
 
 		return
 	}
@@ -133,7 +190,7 @@ func (a *api) deleteDB(c *gin.Context) {
 
 		return
 	} else if err != nil {
-		writeError(c, http.StatusInternalServerError, "internal_error", "Could not delete database")
+		a.fail(c, "delete database", err)
 
 		return
 	}
@@ -181,7 +238,7 @@ func (a *api) createDoc(c *gin.Context) {
 
 	id, err := makeID()
 	if err != nil {
-		writeError(c, http.StatusInternalServerError, "internal_error", "Could not create document")
+		a.fail(c, "generate document ID", err)
 
 		return
 	}
@@ -192,7 +249,7 @@ func (a *api) createDoc(c *gin.Context) {
 		return
 	}
 	if err != nil {
-		writeError(c, http.StatusInternalServerError, "internal_error", "Could not create document")
+		a.fail(c, "create document", err)
 
 		return
 	}
@@ -214,7 +271,7 @@ func (a *api) getDoc(c *gin.Context) {
 		return
 	}
 	if err != nil {
-		writeError(c, http.StatusInternalServerError, "internal_error", "Could not read document")
+		a.fail(c, "read document", err)
 
 		return
 	}
@@ -276,7 +333,7 @@ func (a *api) replaceDoc(c *gin.Context) {
 		return
 	}
 	if err != nil {
-		writeError(c, http.StatusInternalServerError, "internal_error", "Could not replace document")
+		a.fail(c, "replace document", err)
 
 		return
 	}
@@ -339,7 +396,7 @@ func (a *api) patchDoc(c *gin.Context) {
 		return
 	}
 	if err != nil {
-		writeError(c, http.StatusInternalServerError, "internal_error", "Could not patch document")
+		a.fail(c, "patch document", err)
 
 		return
 	}
@@ -372,7 +429,7 @@ func (a *api) deleteDoc(c *gin.Context) {
 		return
 	}
 	if err != nil {
-		writeError(c, http.StatusInternalServerError, "internal_error", "Could not delete document")
+		a.fail(c, "delete document", err)
 
 		return
 	}
@@ -420,6 +477,22 @@ func isJSON(value string) bool {
 	mediaType, _, err := mime.ParseMediaType(value)
 
 	return err == nil && mediaType == "application/json"
+}
+
+func (a *api) fail(c *gin.Context, operation string, err error) {
+	a.log.Error("request failed", "operation", operation, "method", c.Request.Method, "path", c.Request.URL.Path, "error", err)
+	writeFailure(c, err)
+}
+
+func writeFailure(c *gin.Context, err error) {
+	switch {
+	case errors.Is(err, errCorruptData):
+		writeError(c, http.StatusInternalServerError, "corrupt_data", "Stored data is corrupt")
+	case isStoreUnavailable(err):
+		writeError(c, http.StatusServiceUnavailable, "service_unavailable", "Service is unavailable")
+	default:
+		writeError(c, http.StatusInternalServerError, "internal_error", "Internal server error")
+	}
 }
 
 func writeError(c *gin.Context, status int, code, message string) {

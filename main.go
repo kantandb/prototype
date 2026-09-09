@@ -43,9 +43,10 @@ func run(ctx context.Context, cfg config, log *slog.Logger) (runErr error) {
 		}
 	}()
 
+	api := newAPI(store, cfg.maxBodyBytes, log)
 	srv := &http.Server{
 		Addr:              cfg.addr,
-		Handler:           newHandler(store, cfg.maxBodyBytes),
+		Handler:           api.handler(),
 		ReadHeaderTimeout: 5 * time.Second,
 		IdleTimeout:       60 * time.Second,
 	}
@@ -68,6 +69,7 @@ func run(ctx context.Context, cfg config, log *slog.Logger) (runErr error) {
 		log.Info("server stopping")
 	}
 
+	api.stop()
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer cancel()
 
