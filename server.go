@@ -49,6 +49,7 @@ func newHandler(store *store, maxBodyBytes int64) http.Handler {
 	router.POST("/:database/", a.createDoc)
 	router.GET("/:database/:id", a.getDoc)
 	router.PUT("/:database/:id", a.replaceDoc)
+	router.PATCH("/:database/:id", a.patchDoc)
 	router.DELETE("/:database/:id", a.deleteDoc)
 
 	return router
@@ -282,6 +283,69 @@ func (a *api) replaceDoc(c *gin.Context) {
 
 	c.Header("ETag", formatETag(rev))
 	c.Data(http.StatusOK, "application/json", document)
+}
+
+func (a *api) patchDoc(c *gin.Context) {
+	mediaType, err := parsePatchType(c.GetHeader("Content-Type"))
+	if err != nil {
+		writeError(c, http.StatusUnsupportedMediaType, "unsupported_media_type", "Content-Type must select a supported patch format")
+
+		return
+	}
+	if !validDocPath(c) {
+		return
+	}
+
+	match, err := parseIfMatch(c.Request.Header.Values("If-Match"))
+	if err != nil {
+		writeError(c, http.StatusBadRequest, "invalid_if_match", "If-Match is invalid")
+
+		return
+	}
+
+	body, err := readBody(c.Request.Body, a.maxBodyBytes)
+	if errors.Is(err, errBodyTooLarge) {
+		writeError(c, http.StatusRequestEntityTooLarge, "content_too_large", "Request body exceeds the size limit")
+
+		return
+	}
+	if err != nil {
+		writeError(c, http.StatusBadRequest, "invalid_patch", "Could not read patch")
+
+		return
+	}
+
+	doc, err := a.store.patchDoc(c.Param("database"), c.Param("id"), match, func(document []byte) ([]byte, error) {
+		return applyPatch(document, body, mediaType, a.maxBodyBytes)
+	})
+	if errors.Is(err, errDocNotFound) {
+		writeError(c, http.StatusNotFound, "document_not_found", "Document does not exist")
+
+		return
+	}
+	if errors.Is(err, errPreconditionFailed) {
+		writeError(c, http.StatusPreconditionFailed, "precondition_failed", "If-Match precondition failed")
+
+		return
+	}
+	if errors.Is(err, errBodyTooLarge) {
+		writeError(c, http.StatusRequestEntityTooLarge, "content_too_large", "Document exceeds the size limit")
+
+		return
+	}
+	if errors.Is(err, errInvalidPatch) {
+		writeError(c, http.StatusBadRequest, "invalid_patch", "Patch is invalid or produces a non-object document")
+
+		return
+	}
+	if err != nil {
+		writeError(c, http.StatusInternalServerError, "internal_error", "Could not patch document")
+
+		return
+	}
+
+	c.Header("ETag", formatETag(doc.revision))
+	c.Data(http.StatusOK, "application/json", doc.json)
 }
 
 func (a *api) deleteDoc(c *gin.Context) {

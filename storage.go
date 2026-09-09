@@ -194,6 +194,34 @@ func (s *store) replaceDoc(database, id string, json []byte, match matchCond) (r
 	return rev, nil
 }
 
+func (s *store) patchDoc(database, id string, match matchCond, apply func([]byte) ([]byte, error)) (storedDoc, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	key := docKey(database, id)
+	current, err := s.readDoc(key)
+	if err != nil {
+		return storedDoc{}, err
+	}
+	if !matchRevision(match, current.revision) {
+		return storedDoc{}, errPreconditionFailed
+	}
+
+	json, err := apply(current.json)
+	if err != nil {
+		return storedDoc{}, err
+	}
+	rev, err := makeRevision(&current.revision)
+	if err != nil {
+		return storedDoc{}, err
+	}
+	if err := s.db.Set(key, encodeDoc(json, rev), pebble.Sync); err != nil {
+		return storedDoc{}, fmt.Errorf("writing document: %w", err)
+	}
+
+	return storedDoc{json: json, revision: rev}, nil
+}
+
 func (s *store) deleteDoc(database, id string, match matchCond) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

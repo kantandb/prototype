@@ -29,6 +29,15 @@ xh GET localhost:8080/example/01950000-0000-7000-8000-000000000001
 xh PUT localhost:8080/example/01950000-0000-7000-8000-000000000001 \
   If-Match:'"0123456789abcdef0123456789abcdef"' name=Updated
 
+# Merge fields into a document.
+xh PATCH localhost:8080/example/01950000-0000-7000-8000-000000000001 \
+  Content-Type:application/merge-patch+json active:=false
+
+# Apply a JSON Patch.
+echo '[{"op":"replace","path":"/name","value":"Patched"}]' | \
+  xh PATCH localhost:8080/example/01950000-0000-7000-8000-000000000001 \
+  Content-Type:application/json-patch+json
+
 # Delete a document if it exists.
 xh DELETE localhost:8080/example/01950000-0000-7000-8000-000000000001 If-Match:\*
 
