@@ -8,6 +8,7 @@ import (
 	"sync"
 
 	"github.com/cockroachdb/pebble"
+	"github.com/cockroachdb/pebble/bloom"
 )
 
 var (
@@ -21,8 +22,10 @@ var (
 )
 
 var (
-	dbPrefix  = []byte{0x01}
-	docPrefix = []byte{0x02}
+	dbPrefix      = []byte{0x01}
+	docPrefix     = []byte{0x02}
+	idxDefPrefix  = []byte{0x03}
+	idxDataPrefix = []byte{0x04}
 )
 
 const recordVersion byte = 1
@@ -39,8 +42,16 @@ type store struct {
 	mu sync.Mutex // Serializes every mutation.
 }
 
+func storeOptions() *pebble.Options {
+	return &pebble.Options{
+		Levels: []pebble.LevelOptions{{
+			FilterPolicy: bloom.FilterPolicy(10),
+		}},
+	}
+}
+
 func openStore(path string) (*store, error) {
-	db, err := pebble.Open(path, &pebble.Options{})
+	db, err := pebble.Open(path, storeOptions())
 	if err != nil {
 		return nil, fmt.Errorf("opening Pebble: %w", err)
 	}
@@ -56,7 +67,11 @@ func (s *store) close() error {
 	return nil
 }
 
-func (s *store) createDB(name string) error {
+func (s *store) createDB(name string, defs ...indexDef) (createErr error) {
+	if err := validateIndexes(defs); err != nil {
+		return err
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -68,8 +83,23 @@ func (s *store) createDB(name string) error {
 		return errDBExists
 	}
 
-	if err := s.db.Set(dbKey(name), []byte{recordVersion}, pebble.Sync); err != nil {
-		return wrapStore("writing database", err)
+	batch := s.db.NewBatch()
+	defer func() {
+		if err := batch.Close(); err != nil {
+			createErr = errors.Join(createErr, wrapStore("closing database batch", err))
+		}
+	}()
+
+	if err := batch.Set(dbKey(name), []byte{recordVersion}, nil); err != nil {
+		return wrapStore("queuing database", err)
+	}
+	for _, def := range defs {
+		if err := batch.Set(indexDefKey(name, def.name), encodeIndexDef(def), nil); err != nil {
+			return wrapStore("queuing index definition", err)
+		}
+	}
+	if err := batch.Commit(pebble.Sync); err != nil {
+		return wrapStore("committing database", err)
 	}
 
 	return nil
@@ -139,6 +169,14 @@ func (s *store) deleteDB(name string) (deleteErr error) {
 	if err := batch.DeleteRange(prefix, prefixEnd(prefix), nil); err != nil {
 		return wrapStore("queuing document deletion", err)
 	}
+	prefix = indexDataPrefix(name)
+	if err := batch.DeleteRange(prefix, prefixEnd(prefix), nil); err != nil {
+		return wrapStore("queuing index deletion", err)
+	}
+	prefix = indexDefPrefix(name)
+	if err := batch.DeleteRange(prefix, prefixEnd(prefix), nil); err != nil {
+		return wrapStore("queuing index definition deletion", err)
+	}
 	if err := batch.Commit(pebble.Sync); err != nil {
 		return wrapStore("committing database deletion", err)
 	}
@@ -146,7 +184,7 @@ func (s *store) deleteDB(name string) (deleteErr error) {
 	return nil
 }
 
-func (s *store) createDoc(database, id string, json []byte) (revision, error) {
+func (s *store) createDoc(database, id string, json []byte) (rev revision, createErr error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -167,12 +205,34 @@ func (s *store) createDoc(database, id string, json []byte) (revision, error) {
 		return revision{}, errDocExists
 	}
 
-	rev, err := makeRevision(nil)
+	defs, err := s.indexes(database)
 	if err != nil {
 		return revision{}, err
 	}
-	if err := s.db.Set(key, encodeDoc(json, rev), pebble.Sync); err != nil {
-		return revision{}, wrapStore("writing document", err)
+	values, err := indexValues(json, defs)
+	if err != nil {
+		return revision{}, err
+	}
+	rev, err = makeRevision(nil)
+	if err != nil {
+		return revision{}, err
+	}
+
+	batch := s.db.NewBatch()
+	defer func() {
+		if err := batch.Close(); err != nil {
+			createErr = errors.Join(createErr, wrapStore("closing document batch", err))
+		}
+	}()
+
+	if err := batch.Set(key, encodeDoc(json, rev), nil); err != nil {
+		return revision{}, wrapStore("queuing document", err)
+	}
+	if err := setIndexEntries(batch, database, id, values); err != nil {
+		return revision{}, err
+	}
+	if err := batch.Commit(pebble.Sync); err != nil {
+		return revision{}, wrapStore("committing document", err)
 	}
 
 	return rev, nil
@@ -232,7 +292,7 @@ func (s *store) listDocs(database string, limit int, cursor string) (ids []strin
 	return ids, nil
 }
 
-func (s *store) replaceDoc(database, id string, json []byte, match matchCond) (revision, error) {
+func (s *store) replaceDoc(database, id string, json []byte, match matchCond) (rev revision, replaceErr error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -245,18 +305,44 @@ func (s *store) replaceDoc(database, id string, json []byte, match matchCond) (r
 		return revision{}, errPreconditionFailed
 	}
 
-	rev, err := makeRevision(&current.revision)
+	defs, err := s.indexes(database)
 	if err != nil {
 		return revision{}, err
 	}
-	if err := s.db.Set(key, encodeDoc(json, rev), pebble.Sync); err != nil {
-		return revision{}, wrapStore("writing document", err)
+	oldValues, err := indexValues(current.json, defs)
+	if err != nil {
+		return revision{}, fmt.Errorf("%w: %v", errCorruptData, err)
+	}
+	newValues, err := indexValues(json, defs)
+	if err != nil {
+		return revision{}, err
+	}
+	rev, err = makeRevision(&current.revision)
+	if err != nil {
+		return revision{}, err
+	}
+
+	batch := s.db.NewBatch()
+	defer func() {
+		if err := batch.Close(); err != nil {
+			replaceErr = errors.Join(replaceErr, wrapStore("closing replacement batch", err))
+		}
+	}()
+
+	if err := batch.Set(key, encodeDoc(json, rev), nil); err != nil {
+		return revision{}, wrapStore("queuing document replacement", err)
+	}
+	if err := changeIndexEntries(batch, database, id, oldValues, newValues); err != nil {
+		return revision{}, err
+	}
+	if err := batch.Commit(pebble.Sync); err != nil {
+		return revision{}, wrapStore("committing document replacement", err)
 	}
 
 	return rev, nil
 }
 
-func (s *store) patchDoc(database, id string, match matchCond, apply func([]byte) ([]byte, error)) (storedDoc, error) {
+func (s *store) patchDoc(database, id string, match matchCond, apply func([]byte) ([]byte, error)) (doc storedDoc, patchErr error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -273,18 +359,45 @@ func (s *store) patchDoc(database, id string, match matchCond, apply func([]byte
 	if err != nil {
 		return storedDoc{}, err
 	}
+	defs, err := s.indexes(database)
+	if err != nil {
+		return storedDoc{}, err
+	}
+	oldValues, err := indexValues(current.json, defs)
+	if err != nil {
+		return storedDoc{}, fmt.Errorf("%w: %v", errCorruptData, err)
+	}
+	newValues, err := indexValues(json, defs)
+	if err != nil {
+		return storedDoc{}, err
+	}
 	rev, err := makeRevision(&current.revision)
 	if err != nil {
 		return storedDoc{}, err
 	}
-	if err := s.db.Set(key, encodeDoc(json, rev), pebble.Sync); err != nil {
-		return storedDoc{}, wrapStore("writing document", err)
+	doc = storedDoc{json: json, revision: rev}
+
+	batch := s.db.NewBatch()
+	defer func() {
+		if err := batch.Close(); err != nil {
+			patchErr = errors.Join(patchErr, wrapStore("closing patch batch", err))
+		}
+	}()
+
+	if err := batch.Set(key, encodeDoc(json, rev), nil); err != nil {
+		return storedDoc{}, wrapStore("queuing patched document", err)
+	}
+	if err := changeIndexEntries(batch, database, id, oldValues, newValues); err != nil {
+		return storedDoc{}, err
+	}
+	if err := batch.Commit(pebble.Sync); err != nil {
+		return storedDoc{}, wrapStore("committing patched document", err)
 	}
 
-	return storedDoc{json: json, revision: rev}, nil
+	return doc, nil
 }
 
-func (s *store) deleteDoc(database, id string, match matchCond) error {
+func (s *store) deleteDoc(database, id string, match matchCond) (deleteErr error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -297,8 +410,30 @@ func (s *store) deleteDoc(database, id string, match matchCond) error {
 		return errPreconditionFailed
 	}
 
-	if err := s.db.Delete(key, pebble.Sync); err != nil {
-		return wrapStore("deleting document", err)
+	defs, err := s.indexes(database)
+	if err != nil {
+		return err
+	}
+	values, err := indexValues(current.json, defs)
+	if err != nil {
+		return fmt.Errorf("%w: %v", errCorruptData, err)
+	}
+
+	batch := s.db.NewBatch()
+	defer func() {
+		if err := batch.Close(); err != nil {
+			deleteErr = errors.Join(deleteErr, wrapStore("closing document deletion batch", err))
+		}
+	}()
+
+	if err := batch.Delete(key, nil); err != nil {
+		return wrapStore("queuing document deletion", err)
+	}
+	if err := deleteIndexEntries(batch, database, id, values); err != nil {
+		return err
+	}
+	if err := batch.Commit(pebble.Sync); err != nil {
+		return wrapStore("committing document deletion", err)
 	}
 
 	return nil
