@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"crypto/rand"
 	"errors"
 	"fmt"
@@ -170,6 +171,56 @@ func (s *store) createDoc(database, id string, json []byte) (revision, error) {
 
 func (s *store) getDoc(database, id string) (storedDoc, error) {
 	return s.readDoc(docKey(database, id))
+}
+
+func (s *store) listDocs(database string, limit int, cursor string) (ids []string, listErr error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	exists, err := s.hasDB(database)
+	if err != nil {
+		return nil, fmt.Errorf("checking database: %w", err)
+	}
+	if !exists {
+		return nil, errDBNotFound
+	}
+
+	prefix := docsPrefix(database)
+	iter, err := s.db.NewIter(&pebble.IterOptions{
+		LowerBound: prefix,
+		UpperBound: prefixEnd(prefix),
+	})
+	if err != nil {
+		return nil, wrapStore("creating document iterator", err)
+	}
+	defer func() {
+		if err := iter.Close(); err != nil {
+			listErr = errors.Join(listErr, wrapStore("closing document iterator", err))
+		}
+	}()
+
+	valid := iter.First()
+	if cursor != "" {
+		key := docKey(database, cursor)
+		valid = iter.SeekGE(key)
+		if valid && bytes.Equal(iter.Key(), key) {
+			valid = iter.Next()
+		}
+	}
+
+	for ; valid && len(ids) < limit; valid = iter.Next() {
+		id := string(iter.Key()[len(prefix):])
+		if _, err := decodeDoc(iter.Value()); err != nil {
+			return nil, fmt.Errorf("%w: document %q: %v", errCorruptData, id, err)
+		}
+
+		ids = append(ids, id)
+	}
+	if err := iter.Error(); err != nil {
+		return nil, wrapStore("iterating documents", err)
+	}
+
+	return ids, nil
 }
 
 func (s *store) replaceDoc(database, id string, json []byte, match matchCond) (revision, error) {

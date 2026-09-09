@@ -10,6 +10,7 @@ import (
 	"mime"
 	"net/http"
 	"runtime/debug"
+	"strconv"
 	"sync/atomic"
 
 	"github.com/gin-gonic/gin"
@@ -28,6 +29,10 @@ type dbRequest struct {
 
 type dbList struct {
 	Databases []string `json:"databases"`
+}
+
+type docList struct {
+	Documents []string `json:"documents"`
 }
 
 type docResponse struct {
@@ -51,6 +56,11 @@ func newAPI(store *store, maxBodyBytes int64, log *slog.Logger) *api {
 	return &api{store: store, maxBodyBytes: maxBodyBytes, log: log}
 }
 
+const (
+	defaultListLimit = 100
+	maxListLimit     = 1000
+)
+
 func (a *api) handler() http.Handler {
 	router := gin.New()
 	router.HandleMethodNotAllowed = true
@@ -60,6 +70,7 @@ func (a *api) handler() http.Handler {
 	router.GET("/healthz", a.health)
 	router.POST("/", a.createDB)
 	router.GET("/", a.listDBs)
+	router.GET("/:database", a.listDocs)
 	router.DELETE("/:database", a.deleteDB)
 	router.POST("/:database/", a.createDoc)
 	router.GET("/:database/:id", a.getDoc)
@@ -175,6 +186,52 @@ func (a *api) listDBs(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, dbList{Databases: names})
+}
+
+func (a *api) listDocs(c *gin.Context) {
+	database := c.Param("database")
+	if err := validateName(database); err != nil {
+		writeError(c, http.StatusBadRequest, "invalid_name", "Database name is invalid")
+
+		return
+	}
+
+	limit := defaultListLimit
+	if value, ok := c.GetQuery("limit"); ok {
+		parsed, err := strconv.Atoi(value)
+		if err != nil || parsed < 1 || parsed > maxListLimit {
+			writeError(c, http.StatusBadRequest, "invalid_limit", "Limit must be between 1 and 1000")
+
+			return
+		}
+		limit = parsed
+	}
+
+	cursor := c.Query("cursor")
+	if cursor != "" {
+		if err := validateID(cursor); err != nil {
+			writeError(c, http.StatusBadRequest, "invalid_cursor", "Cursor is invalid")
+
+			return
+		}
+	}
+
+	ids, err := a.store.listDocs(database, limit, cursor)
+	if errors.Is(err, errDBNotFound) {
+		writeError(c, http.StatusNotFound, "database_not_found", "Database does not exist")
+
+		return
+	}
+	if err != nil {
+		a.fail(c, "list documents", err)
+
+		return
+	}
+	if ids == nil {
+		ids = []string{}
+	}
+
+	c.JSON(http.StatusOK, docList{Documents: ids})
 }
 
 func (a *api) deleteDB(c *gin.Context) {

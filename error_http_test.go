@@ -63,7 +63,13 @@ func TestCorruptionIsMappedAndLogged(t *testing.T) {
 	server := httptest.NewServer(newAPI(store, defaultMaxBodyBytes, log).handler())
 	t.Cleanup(server.Close)
 
-	res := sendRequest(t, server, http.MethodGet, "/db/"+id, "", "")
+	res := sendRequest(t, server, http.MethodGet, "/db", "", "")
+	checkResponse(t, res, http.StatusInternalServerError, `{"error":{"code":"corrupt_data","message":"Stored data is corrupt"}}`)
+	if !strings.Contains(logs.String(), `"operation":"list documents"`) {
+		t.Errorf("list log = %s", logs.String())
+	}
+
+	res = sendRequest(t, server, http.MethodGet, "/db/"+id, "", "")
 	body := readResponse(t, res)
 	if res.StatusCode != http.StatusInternalServerError {
 		t.Errorf("status = %d, want %d", res.StatusCode, http.StatusInternalServerError)
@@ -94,6 +100,9 @@ func TestClosedStorageReturnsUnavailable(t *testing.T) {
 	t.Cleanup(server.Close)
 	id := "01950000-0000-7000-8000-000000000001"
 
-	res := sendRequest(t, server, http.MethodGet, "/db/"+id, "", "")
+	res := sendRequest(t, server, http.MethodGet, "/db", "", "")
+	checkResponse(t, res, http.StatusServiceUnavailable, `{"error":{"code":"service_unavailable","message":"Service is unavailable"}}`)
+
+	res = sendRequest(t, server, http.MethodGet, "/db/"+id, "", "")
 	checkResponse(t, res, http.StatusServiceUnavailable, `{"error":{"code":"service_unavailable","message":"Service is unavailable"}}`)
 }

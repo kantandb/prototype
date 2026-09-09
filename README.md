@@ -22,6 +22,9 @@ xh GET localhost:8080/
 # Create a document.
 xh POST localhost:8080/example/ name=KantanDB active:=true
 
+# List document IDs, optionally after a cursor.
+xh GET localhost:8080/example limit==100 cursor==01950000-0000-7000-8000-000000000001
+
 # Read a document using the returned ID.
 xh GET localhost:8080/example/01950000-0000-7000-8000-000000000001
 

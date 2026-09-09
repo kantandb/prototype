@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -51,6 +52,97 @@ func TestDocumentLifecycleHTTP(t *testing.T) {
 
 	res = sendRequest(t, server, http.MethodGet, "/db/"+created.ID, "", "")
 	checkResponse(t, res, http.StatusNotFound, `{"error":{"code":"document_not_found","message":"Document does not exist"}}`)
+}
+
+func TestListDocumentsHTTP(t *testing.T) {
+	t.Parallel()
+
+	server := newTestServer(t, defaultMaxBodyBytes)
+	res := sendRequest(t, server, http.MethodPost, "/", `{"name":"db"}`, "application/json")
+	checkResponse(t, res, http.StatusCreated, `{"name":"db"}`)
+
+	res = sendRequest(t, server, http.MethodGet, "/db", "", "")
+	checkResponse(t, res, http.StatusOK, `{"documents":[]}`)
+
+	var ids []string
+	for range 3 {
+		res = sendRequest(t, server, http.MethodPost, "/db/", `{}`, "application/json")
+		if res.StatusCode != http.StatusCreated {
+			t.Fatalf("status = %d, want %d; body = %s", res.StatusCode, http.StatusCreated, readResponse(t, res))
+		}
+
+		var created docResponse
+		if err := json.NewDecoder(res.Body).Decode(&created); err != nil {
+			t.Fatalf("Decode() error = %v", err)
+		}
+		if err := res.Body.Close(); err != nil {
+			t.Errorf("Response.Body.Close() error = %v", err)
+		}
+		ids = append(ids, created.ID)
+	}
+	slices.Sort(ids)
+
+	res = sendRequest(t, server, http.MethodGet, "/db?limit=2", "", "")
+	var page docList
+	if err := json.NewDecoder(res.Body).Decode(&page); err != nil {
+		t.Fatalf("Decode() error = %v", err)
+	}
+	if err := res.Body.Close(); err != nil {
+		t.Errorf("Response.Body.Close() error = %v", err)
+	}
+	if !slices.Equal(page.Documents, ids[:2]) {
+		t.Errorf("documents = %v, want %v", page.Documents, ids[:2])
+	}
+
+	res = sendRequest(t, server, http.MethodGet, "/db?limit=1&cursor="+ids[1], "", "")
+	page = docList{}
+	if err := json.NewDecoder(res.Body).Decode(&page); err != nil {
+		t.Fatalf("Decode() error = %v", err)
+	}
+	if err := res.Body.Close(); err != nil {
+		t.Errorf("Response.Body.Close() error = %v", err)
+	}
+	if want := ids[2:]; !slices.Equal(page.Documents, want) {
+		t.Errorf("documents after cursor = %v, want %v", page.Documents, want)
+	}
+
+	res = sendRequest(t, server, http.MethodGet, "/db?cursor="+ids[2], "", "")
+	checkResponse(t, res, http.StatusOK, `{"documents":[]}`)
+}
+
+func TestListDocumentsValidationHTTP(t *testing.T) {
+	t.Parallel()
+
+	server := newTestServer(t, defaultMaxBodyBytes)
+	res := sendRequest(t, server, http.MethodPost, "/", `{"name":"db"}`, "application/json")
+	checkResponse(t, res, http.StatusCreated, `{"name":"db"}`)
+
+	tests := []struct {
+		path string
+		code string
+	}{
+		{path: "/db?limit=", code: "invalid_limit"},
+		{path: "/db?limit=0", code: "invalid_limit"},
+		{path: "/db?limit=1001", code: "invalid_limit"},
+		{path: "/db?limit=none", code: "invalid_limit"},
+		{path: "/db?cursor=bad", code: "invalid_cursor"},
+	}
+	for _, tt := range tests {
+		res = sendRequest(t, server, http.MethodGet, tt.path, "", "")
+		body := readResponse(t, res)
+		if res.StatusCode != http.StatusBadRequest {
+			t.Errorf("GET %s status = %d, want %d; body = %s", tt.path, res.StatusCode, http.StatusBadRequest, body)
+		}
+		if !strings.Contains(body, `"code":"`+tt.code+`"`) {
+			t.Errorf("GET %s body = %s, want code %q", tt.path, body, tt.code)
+		}
+	}
+
+	res = sendRequest(t, server, http.MethodGet, "/Bad", "", "")
+	checkResponse(t, res, http.StatusBadRequest, `{"error":{"code":"invalid_name","message":"Database name is invalid"}}`)
+
+	res = sendRequest(t, server, http.MethodGet, "/missing", "", "")
+	checkResponse(t, res, http.StatusNotFound, `{"error":{"code":"database_not_found","message":"Database does not exist"}}`)
 }
 
 func TestCreateDocumentValidationHTTP(t *testing.T) {

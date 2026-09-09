@@ -101,6 +101,59 @@ func TestStoreDocuments(t *testing.T) {
 	}
 }
 
+func TestStoreListsDocuments(t *testing.T) {
+	t.Parallel()
+
+	store := testStore(t)
+	for _, name := range []string{"db", "other", "empty"} {
+		if err := store.createDB(name); err != nil {
+			t.Fatalf("createDB(%q) error = %v", name, err)
+		}
+	}
+
+	ids := []string{
+		"01950000-0000-7000-8000-000000000003",
+		"01950000-0000-7000-8000-000000000001",
+		"01950000-0000-7000-8000-000000000002",
+	}
+	for _, id := range ids {
+		if _, err := store.createDoc("db", id, []byte(`{"ok":true}`)); err != nil {
+			t.Fatalf("createDoc(%q) error = %v", id, err)
+		}
+	}
+	if _, err := store.createDoc("other", "01950000-0000-7000-8000-000000000000", []byte(`{}`)); err != nil {
+		t.Fatalf("createDoc(other) error = %v", err)
+	}
+
+	got, err := store.listDocs("db", 2, "")
+	if err != nil {
+		t.Fatalf("listDocs() error = %v", err)
+	}
+	want := []string{ids[1], ids[2]}
+	if !slices.Equal(got, want) {
+		t.Errorf("listDocs() = %v, want %v", got, want)
+	}
+
+	got, err = store.listDocs("db", 2, ids[2])
+	if err != nil {
+		t.Fatalf("listDocs() with cursor error = %v", err)
+	}
+	if want = []string{ids[0]}; !slices.Equal(got, want) {
+		t.Errorf("listDocs() with cursor = %v, want %v", got, want)
+	}
+
+	got, err = store.listDocs("empty", 2, "")
+	if err != nil {
+		t.Fatalf("listDocs(empty) error = %v", err)
+	}
+	if len(got) != 0 {
+		t.Errorf("listDocs(empty) = %v, want empty", got)
+	}
+	if _, err := store.listDocs("missing", 2, ""); !errors.Is(err, errDBNotFound) {
+		t.Fatalf("listDocs(missing) error = %v, want %v", err, errDBNotFound)
+	}
+}
+
 func TestDeleteDBDeletesOwnDocuments(t *testing.T) {
 	t.Parallel()
 
@@ -217,6 +270,9 @@ func TestStoreRejectsCorruption(t *testing.T) {
 	}
 	if _, err := store.getDoc("good", "id"); err == nil {
 		t.Fatal("getDoc() error = nil, want corruption error")
+	}
+	if _, err := store.listDocs("good", 100, ""); !errors.Is(err, errCorruptData) {
+		t.Fatalf("listDocs() error = %v, want %v", err, errCorruptData)
 	}
 }
 
