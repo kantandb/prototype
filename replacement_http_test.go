@@ -120,13 +120,28 @@ func TestConcurrentConditionalReplaceHTTP(t *testing.T) {
 	}
 
 	res := sendRequest(t, server, http.MethodGet, path, "", "")
-	if res.Header.Get("ETag") == etag {
+	visibleETag := res.Header.Get("ETag")
+	if visibleETag == etag {
 		t.Error("visible document retained old ETag")
 	}
-	if res.StatusCode != http.StatusOK {
-		t.Errorf("status = %d, want %d", res.StatusCode, http.StatusOK)
+	if _, err := parseETag(visibleETag); err != nil {
+		t.Errorf("visible ETag = %q: %v", visibleETag, err)
 	}
-	_ = readResponse(t, res)
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body = %s", res.StatusCode, http.StatusOK, readResponse(t, res))
+	}
+	var visible struct {
+		Value int `json:"value"`
+	}
+	if err := json.NewDecoder(res.Body).Decode(&visible); err != nil {
+		t.Fatalf("Decode() error = %v", err)
+	}
+	if err := res.Body.Close(); err != nil {
+		t.Errorf("Response.Body.Close() error = %v", err)
+	}
+	if visible.Value < 1 || visible.Value > workers {
+		t.Errorf("visible value = %d, want a complete replacement", visible.Value)
+	}
 }
 
 func createHTTPDoc(t *testing.T, server *httptest.Server, body string) (string, string) {

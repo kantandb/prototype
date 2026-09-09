@@ -111,22 +111,42 @@ func TestDocumentMissingResourcesAndPathsHTTP(t *testing.T) {
 	checkResponse(t, res, http.StatusBadRequest, `{"error":{"code":"invalid_name","message":"Database name is invalid"}}`)
 }
 
-func TestDocumentPersistenceHTTP(t *testing.T) {
+func TestHTTPDurabilityAcrossRestarts(t *testing.T) {
 	t.Parallel()
 
-	path := t.TempDir()
-	store, err := openStore(path)
-	if err != nil {
-		t.Fatalf("openStore() error = %v", err)
+	dataPath := t.TempDir()
+	var store *store
+	var server *httptest.Server
+	start := func() {
+		var err error
+		store, err = openStore(dataPath)
+		if err != nil {
+			t.Fatalf("openStore() error = %v", err)
+		}
+		server = httptest.NewServer(newHandler(store, defaultMaxBodyBytes))
 	}
-	server := httptest.NewServer(newHandler(store, defaultMaxBodyBytes))
+	stop := func() {
+		server.Close()
+		if err := store.close(); err != nil {
+			t.Fatalf("store.close() error = %v", err)
+		}
+		server = nil
+		store = nil
+	}
+	defer func() {
+		if server != nil {
+			stop()
+		}
+	}()
 
+	start()
 	res := sendRequest(t, server, http.MethodPost, "/", `{"name":"db"}`, "application/json")
 	checkResponse(t, res, http.StatusCreated, `{"name":"db"}`)
-	res = sendRequest(t, server, http.MethodPost, "/db/", `{"saved":true}`, "application/json")
+	res = sendRequest(t, server, http.MethodPost, "/db/", `{"stage":"created"}`, "application/json")
 	if res.StatusCode != http.StatusCreated {
 		t.Fatalf("status = %d, want %d; body = %s", res.StatusCode, http.StatusCreated, readResponse(t, res))
 	}
+	createdETag := res.Header.Get("ETag")
 	var created docResponse
 	if err := json.NewDecoder(res.Body).Decode(&created); err != nil {
 		t.Fatalf("Decode() error = %v", err)
@@ -134,25 +154,49 @@ func TestDocumentPersistenceHTTP(t *testing.T) {
 	if err := res.Body.Close(); err != nil {
 		t.Errorf("Response.Body.Close() error = %v", err)
 	}
-	server.Close()
-	if err := store.close(); err != nil {
-		t.Fatalf("store.close() error = %v", err)
-	}
+	docPath := "/db/" + created.ID
+	stop()
 
-	store, err = openStore(path)
-	if err != nil {
-		t.Fatalf("reopen store error = %v", err)
+	start()
+	res = sendRequest(t, server, http.MethodGet, docPath, "", "")
+	if got := res.Header.Get("ETag"); got != createdETag {
+		t.Errorf("created ETag after restart = %q, want %q", got, createdETag)
 	}
-	server = httptest.NewServer(newHandler(store, defaultMaxBodyBytes))
-	t.Cleanup(func() {
-		if err := store.close(); err != nil {
-			t.Errorf("store.close() error = %v", err)
-		}
-	})
-	t.Cleanup(server.Close)
+	checkResponse(t, res, http.StatusOK, `{"stage":"created"}`)
+	res = sendMatchRequest(t, server, http.MethodPut, docPath, `{"stage":"replaced"}`, "application/json", createdETag)
+	replacedETag := res.Header.Get("ETag")
+	checkResponse(t, res, http.StatusOK, `{"stage":"replaced"}`)
+	stop()
 
-	res = sendRequest(t, server, http.MethodGet, "/db/"+created.ID, "", "")
-	checkResponse(t, res, http.StatusOK, `{"saved":true}`)
-	res = sendRequest(t, server, http.MethodDelete, "/db/"+created.ID, "", "")
+	start()
+	res = sendRequest(t, server, http.MethodGet, docPath, "", "")
+	if got := res.Header.Get("ETag"); got != replacedETag {
+		t.Errorf("replacement ETag after restart = %q, want %q", got, replacedETag)
+	}
+	checkResponse(t, res, http.StatusOK, `{"stage":"replaced"}`)
+	res = sendMatchRequest(t, server, http.MethodPatch, docPath, `{"merged":true}`, mergePatchType, replacedETag)
+	patchedETag := res.Header.Get("ETag")
+	checkResponse(t, res, http.StatusOK, `{"merged":true,"stage":"replaced"}`)
+	stop()
+
+	start()
+	res = sendRequest(t, server, http.MethodGet, docPath, "", "")
+	if got := res.Header.Get("ETag"); got != patchedETag {
+		t.Errorf("patch ETag after restart = %q, want %q", got, patchedETag)
+	}
+	checkResponse(t, res, http.StatusOK, `{"merged":true,"stage":"replaced"}`)
+	res = sendMatchRequest(t, server, http.MethodDelete, docPath, "", "", patchedETag)
 	checkResponse(t, res, http.StatusNoContent, "")
+	stop()
+
+	start()
+	res = sendRequest(t, server, http.MethodGet, docPath, "", "")
+	checkResponse(t, res, http.StatusNotFound, `{"error":{"code":"document_not_found","message":"Document does not exist"}}`)
+	res = sendRequest(t, server, http.MethodDelete, "/db", "", "")
+	checkResponse(t, res, http.StatusNoContent, "")
+	stop()
+
+	start()
+	res = sendRequest(t, server, http.MethodGet, "/", "", "")
+	checkResponse(t, res, http.StatusOK, `{"databases":[]}`)
 }
