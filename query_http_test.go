@@ -8,6 +8,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/cockroachdb/pebble"
 )
 
 func TestQueryDocumentsHTTP(t *testing.T) {
@@ -78,6 +80,9 @@ func TestQueryDocumentsHTTP(t *testing.T) {
 	checkResponse(t, res, http.StatusCreated, `{"name":"others","indexes":[{"name":"active","path":"/active"}]}`)
 	res = sendRequest(t, server, http.MethodGet, "/others?index=active&value=true&cursor="+cursor, "", "")
 	checkResponse(t, res, http.StatusBadRequest, `{"error":{"code":"invalid_cursor","message":"Cursor is invalid"}}`)
+
+	res = sendRequest(t, server, http.MethodDelete, "/users/"+active[0], "", "")
+	checkResponse(t, res, http.StatusNoContent, "")
 
 	path := "/users?index=active&value=true&limit=1&cursor=" + cursor
 	res = sendRequest(t, server, http.MethodGet, path, "", "")
@@ -211,6 +216,39 @@ func TestQueryDocumentsValidationHTTP(t *testing.T) {
 		if !strings.Contains(body, `"code":"`+tt.code+`"`) {
 			t.Errorf("GET %s body = %s, want code %q", tt.path, body, tt.code)
 		}
+	}
+}
+
+func TestQueryCorruptIndexHTTP(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		id   string
+	}{
+		{name: "malformed ID", id: "bad"},
+		{name: "missing document", id: testCursorID},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store := testStore(t)
+			if err := store.createDB("db", indexDef{name: "name", path: "/name"}); err != nil {
+				t.Fatalf("createDB() error = %v", err)
+			}
+			value, err := encodeIndexValue("value")
+			if err != nil {
+				t.Fatalf("encodeIndexValue() error = %v", err)
+			}
+			if err := store.db.Set(indexKey("db", "name", value, tt.id), nil, pebble.Sync); err != nil {
+				t.Fatalf("Set() error = %v", err)
+			}
+
+			server := httptest.NewServer(newHandler(store, defaultMaxBodyBytes))
+			t.Cleanup(server.Close)
+			path := "/db?index=name&value=" + url.QueryEscape(`"value"`)
+			res := sendRequest(t, server, http.MethodGet, path, "", "")
+			checkResponse(t, res, http.StatusInternalServerError, `{"error":{"code":"corrupt_data","message":"Stored data is corrupt"}}`)
+		})
 	}
 }
 

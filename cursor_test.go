@@ -83,6 +83,7 @@ func TestQueryCursorValidation(t *testing.T) {
 		{name: "empty"},
 		{name: "invalid base64", token: "!"},
 		{name: "truncated", token: base64.RawURLEncoding.EncodeToString([]byte{1})},
+		{name: "fabricated", token: valid(1, "users", "email", []byte{0x00}, testCursorID, nil)},
 		{name: "unsupported version", token: valid(2, "users", "email", []byte{0x00}, testCursorID, nil)},
 		{name: "invalid database", token: valid(1, "Bad", "email", []byte{0x00}, testCursorID, nil)},
 		{name: "invalid index", token: valid(1, "users", "Bad", []byte{0x00}, testCursorID, nil)},
