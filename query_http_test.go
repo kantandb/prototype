@@ -50,8 +50,15 @@ func TestQueryDocumentsHTTP(t *testing.T) {
 	if page.Cursor == "" {
 		t.Error("cursor is empty on first page")
 	}
+	if page.Cursor == active[0] {
+		t.Error("query cursor exposes the document ID")
+	}
 
-	path := "/users?index=active&value=true&limit=1&cursor=" + url.QueryEscape(page.Cursor)
+	cursor := url.QueryEscape(page.Cursor)
+	res = sendRequest(t, server, http.MethodGet, "/users?index=active&value=false&cursor="+cursor, "", "")
+	checkResponse(t, res, http.StatusBadRequest, `{"error":{"code":"invalid_cursor","message":"Cursor is invalid"}}`)
+
+	path := "/users?index=active&value=true&limit=1&cursor=" + cursor
 	res = sendRequest(t, server, http.MethodGet, path, "", "")
 	page = docList{}
 	if err := json.NewDecoder(res.Body).Decode(&page); err != nil {
@@ -88,6 +95,7 @@ func TestQueryDocumentsValidationHTTP(t *testing.T) {
 		{path: "/users?index=active&value=true+false", status: http.StatusBadRequest, code: "invalid_query"},
 		{path: "/users?index=active&value=%5B%5D", status: http.StatusBadRequest, code: "invalid_query"},
 		{path: "/users?index=active&value=%7B%7D", status: http.StatusBadRequest, code: "invalid_query"},
+		{path: "/users?index=active&value=true&cursor=bad", status: http.StatusBadRequest, code: "invalid_cursor"},
 		{path: "/users?index=active&index=active&value=true", status: http.StatusBadRequest, code: "invalid_query"},
 		{path: "/users?index=missing&value=true", status: http.StatusNotFound, code: "index_not_found"},
 		{path: "/missing?index=active&value=true", status: http.StatusNotFound, code: "database_not_found"},

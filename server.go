@@ -244,11 +244,26 @@ func (a *api) listDocs(c *gin.Context) {
 	}
 
 	var ids []string
+	var encoded []byte
+	var more bool
 	var err error
 	if query.indexed {
-		ids, err = a.store.queryDocs(database, query.index, query.value, query.limit+1, query.cursor)
+		encoded, err = encodeIndexValue(query.value)
+		cursor := ""
+		if err == nil && query.cursor != "" {
+			decoded, decodeErr := decodeQueryCursor(query.cursor)
+			if decodeErr != nil || decoded.index != query.index || !bytes.Equal(decoded.value, encoded) {
+				writeError(c, http.StatusBadRequest, "invalid_cursor", "Cursor is invalid")
+
+				return
+			}
+			cursor = decoded.id
+		}
+		if err == nil {
+			ids, more, err = a.store.queryDocs(database, query.index, query.value, query.limit, cursor)
+		}
 	} else {
-		ids, err = a.store.listDocs(database, query.limit+1, query.cursor)
+		ids, more, err = a.store.listDocs(database, query.limit, query.cursor)
 	}
 	if errors.Is(err, errDBNotFound) {
 		writeError(c, http.StatusNotFound, "database_not_found", "Database does not exist")
@@ -271,7 +286,22 @@ func (a *api) listDocs(c *gin.Context) {
 		return
 	}
 
-	ids, cursor := docPage(ids, query.limit)
+	if ids == nil {
+		ids = []string{}
+	}
+
+	cursor := ""
+	if more && query.indexed {
+		cursor, err = encodeQueryCursor(queryCursor{index: query.index, value: encoded, id: ids[len(ids)-1]})
+		if err != nil {
+			a.fail(c, "encode query cursor", err)
+
+			return
+		}
+	} else if more {
+		cursor = ids[len(ids)-1]
+	}
+
 	c.JSON(http.StatusOK, docList{Documents: ids, Cursor: cursor})
 }
 
@@ -360,19 +390,6 @@ func decodeQueryValue(raw string) (any, error) {
 	default:
 		return nil, errors.New("value must be scalar")
 	}
-}
-
-func docPage(ids []string, limit int) ([]string, string) {
-	if ids == nil {
-		ids = []string{}
-	}
-	if len(ids) <= limit {
-		return ids, ""
-	}
-
-	ids = ids[:limit]
-
-	return ids, ids[len(ids)-1]
 }
 
 func parseListQuery(c *gin.Context, validateCursor func(string) error) (int, string, bool) {

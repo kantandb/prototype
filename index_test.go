@@ -162,18 +162,32 @@ func TestStoreIndexesDocuments(t *testing.T) {
 	assertQuery(t, store, "users", "item", "first", []string{"a"})
 	assertQuery(t, store, "users", "object", "ignored", nil)
 
-	ids, err := store.queryDocs("users", "email", "alice@example.com", 1, "a")
+	ids, more, err := store.queryDocs("users", "email", "alice@example.com", 1, "")
+	if err != nil {
+		t.Fatalf("queryDocs() error = %v", err)
+	}
+	if !more {
+		t.Error("queryDocs() more = false, want true")
+	}
+	if want := []string{"a"}; !slices.Equal(ids, want) {
+		t.Errorf("queryDocs() = %v, want %v", ids, want)
+	}
+
+	ids, more, err = store.queryDocs("users", "email", "alice@example.com", 1, "a")
 	if err != nil {
 		t.Fatalf("queryDocs(cursor) error = %v", err)
+	}
+	if more {
+		t.Error("queryDocs(cursor) more = true, want false")
 	}
 	if want := []string{"b"}; !slices.Equal(ids, want) {
 		t.Errorf("queryDocs(cursor) = %v, want %v", ids, want)
 	}
 
-	if _, err := store.queryDocs("users", "missing", "value", 10, ""); !errors.Is(err, errIndexNotFound) {
+	if _, _, err := store.queryDocs("users", "missing", "value", 10, ""); !errors.Is(err, errIndexNotFound) {
 		t.Errorf("queryDocs(missing index) error = %v, want %v", err, errIndexNotFound)
 	}
-	if _, err := store.queryDocs("missing", "email", "value", 10, ""); !errors.Is(err, errDBNotFound) {
+	if _, _, err := store.queryDocs("missing", "email", "value", 10, ""); !errors.Is(err, errDBNotFound) {
 		t.Errorf("queryDocs(missing database) error = %v, want %v", err, errDBNotFound)
 	}
 }
@@ -307,7 +321,7 @@ func TestStoreRejectsCorruptIndex(t *testing.T) {
 	if err := store.db.Set(indexKey("db", "name", value, "id"), []byte{1}, pebble.Sync); err != nil {
 		t.Fatalf("Set(entry) error = %v", err)
 	}
-	if _, err := store.queryDocs("db", "name", "value", 10, ""); !errors.Is(err, errCorruptData) {
+	if _, _, err := store.queryDocs("db", "name", "value", 10, ""); !errors.Is(err, errCorruptData) {
 		t.Errorf("queryDocs() error = %v, want %v", err, errCorruptData)
 	}
 }
@@ -315,9 +329,12 @@ func TestStoreRejectsCorruptIndex(t *testing.T) {
 func assertQuery(t *testing.T, store *store, database, index string, value any, want []string) {
 	t.Helper()
 
-	got, err := store.queryDocs(database, index, value, 100, "")
+	got, more, err := store.queryDocs(database, index, value, 100, "")
 	if err != nil {
 		t.Fatalf("queryDocs(%q, %q) error = %v", database, index, err)
+	}
+	if more {
+		t.Errorf("queryDocs(%q, %q) more = true, want false", database, index)
 	}
 	if !slices.Equal(got, want) {
 		t.Errorf("queryDocs(%q, %q) = %v, want %v", database, index, got, want)

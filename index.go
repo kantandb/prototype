@@ -338,35 +338,35 @@ func deleteIndexEntries(batch *pebble.Batch, database, id string, values map[str
 	return nil
 }
 
-func (s *store) queryDocs(database, index string, value any, limit int, cursor string) (ids []string, queryErr error) {
+func (s *store) queryDocs(database, index string, value any, limit int, cursor string) (ids []string, more bool, queryErr error) {
 	dbMu := s.dbLock(database)
 	dbMu.RLock()
 	defer dbMu.RUnlock()
 
 	exists, err := s.hasDB(database)
 	if err != nil {
-		return nil, fmt.Errorf("checking database: %w", err)
+		return nil, false, fmt.Errorf("checking database: %w", err)
 	}
 	if !exists {
-		return nil, errDBNotFound
+		return nil, false, errDBNotFound
 	}
 
 	defs, err := s.indexes(database)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	if _, ok := findIndex(defs, index); !ok {
-		return nil, errIndexNotFound
+		return nil, false, errIndexNotFound
 	}
 
 	encoded, err := encodeIndexValue(value)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	prefix := indexValuePrefix(database, index, encoded)
 	iter, err := s.db.NewIter(&pebble.IterOptions{LowerBound: prefix, UpperBound: prefixEnd(prefix)})
 	if err != nil {
-		return nil, wrapStore("creating query iterator", err)
+		return nil, false, wrapStore("creating query iterator", err)
 	}
 	defer func() {
 		if err := iter.Close(); err != nil {
@@ -383,15 +383,18 @@ func (s *store) queryDocs(database, index string, value any, limit int, cursor s
 		}
 	}
 
-	for ; valid && len(ids) < limit; valid = iter.Next() {
+	for ; valid && len(ids) <= limit; valid = iter.Next() {
 		if len(iter.Value()) != 0 || len(iter.Key()) <= len(prefix) {
-			return nil, fmt.Errorf("%w: invalid index entry", errCorruptData)
+			return nil, false, fmt.Errorf("%w: invalid index entry", errCorruptData)
 		}
 		ids = append(ids, string(iter.Key()[len(prefix):]))
 	}
 	if err := iter.Error(); err != nil {
-		return nil, wrapStore("iterating query", err)
+		return nil, false, wrapStore("iterating query", err)
+	}
+	if len(ids) > limit {
+		return ids[:limit], true, nil
 	}
 
-	return ids, nil
+	return ids, false, nil
 }
