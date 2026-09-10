@@ -15,7 +15,7 @@ import (
 
 const (
 	queryCursorVersion          = 1
-	maxQueryCursorSize          = 1 + 10 + 63 + 10 + maxIndexValue + 10 + 36
+	maxQueryCursorSize          = 1 + 10 + 63 + 10 + 63 + 10 + maxIndexValue + 10 + 36
 	maxEncryptedQueryCursorSize = maxQueryCursorSize + 12 + 16
 )
 
@@ -27,17 +27,19 @@ var (
 )
 
 type queryCursor struct {
-	index string
-	value []byte
-	id    string
+	database string
+	index    string
+	value    []byte
+	id       string
 }
 
 func encodeQueryCursor(cursor queryCursor) (string, error) {
-	if err := validateName(cursor.index); err != nil || !validCursorValue(cursor.value) || validateID(cursor.id) != nil {
+	if err := validateName(cursor.database); err != nil || validateName(cursor.index) != nil || !validCursorValue(cursor.value) || validateID(cursor.id) != nil {
 		return "", errInvalidQueryCursor
 	}
 
 	data := []byte{queryCursorVersion}
+	data = appendPart(data, []byte(cursor.database))
 	data = appendPart(data, []byte(cursor.index))
 	data = appendPart(data, cursor.value)
 	data = appendPart(data, []byte(cursor.id))
@@ -78,7 +80,11 @@ func decodeQueryCursor(token string) (queryCursor, error) {
 		return queryCursor{}, errInvalidQueryCursor
 	}
 
-	index, rest, ok := readPart(data[1:])
+	database, rest, ok := readPart(data[1:])
+	if !ok {
+		return queryCursor{}, errInvalidQueryCursor
+	}
+	index, rest, ok := readPart(rest)
 	if !ok {
 		return queryCursor{}, errInvalidQueryCursor
 	}
@@ -91,8 +97,8 @@ func decodeQueryCursor(token string) (queryCursor, error) {
 		return queryCursor{}, errInvalidQueryCursor
 	}
 
-	cursor := queryCursor{index: string(index), value: bytes.Clone(value), id: string(id)}
-	if err := validateName(cursor.index); err != nil || !validCursorValue(cursor.value) || validateID(cursor.id) != nil {
+	cursor := queryCursor{database: string(database), index: string(index), value: bytes.Clone(value), id: string(id)}
+	if err := validateName(cursor.database); err != nil || validateName(cursor.index) != nil || !validCursorValue(cursor.value) || validateID(cursor.id) != nil {
 		return queryCursor{}, errInvalidQueryCursor
 	}
 

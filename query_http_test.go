@@ -59,6 +59,11 @@ func TestQueryDocumentsHTTP(t *testing.T) {
 	res = sendRequest(t, server, http.MethodGet, "/users?index=active&value=false&cursor="+cursor, "", "")
 	checkResponse(t, res, http.StatusBadRequest, `{"error":{"code":"invalid_cursor","message":"Cursor is invalid"}}`)
 
+	res = sendRequest(t, server, http.MethodPost, "/", `{"name":"others","indexes":[{"name":"active","path":"/active"}]}`, "application/json")
+	checkResponse(t, res, http.StatusCreated, `{"name":"others","indexes":[{"name":"active","path":"/active"}]}`)
+	res = sendRequest(t, server, http.MethodGet, "/others?index=active&value=true&cursor="+cursor, "", "")
+	checkResponse(t, res, http.StatusBadRequest, `{"error":{"code":"invalid_cursor","message":"Cursor is invalid"}}`)
+
 	path := "/users?index=active&value=true&limit=1&cursor=" + cursor
 	res = sendRequest(t, server, http.MethodGet, path, "", "")
 	page = docList{}

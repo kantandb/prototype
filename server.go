@@ -252,7 +252,7 @@ func (a *api) listDocs(c *gin.Context) {
 		cursor := ""
 		if err == nil && query.cursor != "" {
 			decoded, decodeErr := decodeQueryCursor(query.cursor)
-			if decodeErr != nil || decoded.index != query.index || !bytes.Equal(decoded.value, encoded) {
+			if decodeErr != nil || decoded.database != database || decoded.index != query.index || !bytes.Equal(decoded.value, encoded) {
 				writeError(c, http.StatusBadRequest, "invalid_cursor", "Cursor is invalid")
 
 				return
@@ -292,7 +292,7 @@ func (a *api) listDocs(c *gin.Context) {
 
 	cursor := ""
 	if more && query.indexed {
-		cursor, err = encodeQueryCursor(queryCursor{index: query.index, value: encoded, id: ids[len(ids)-1]})
+		cursor, err = encodeQueryCursor(queryCursor{database: database, index: query.index, value: encoded, id: ids[len(ids)-1]})
 		if err != nil {
 			a.fail(c, "encode query cursor", err)
 
