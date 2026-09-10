@@ -24,7 +24,26 @@ type api struct {
 }
 
 type dbRequest struct {
+	Name    string          `json:"name"`
+	Indexes *[]indexRequest `json:"indexes,omitempty"`
+}
+
+type indexRequest struct {
 	Name string `json:"name"`
+	Path string `json:"path"`
+}
+
+func (r dbRequest) indexDefs() []indexDef {
+	if r.Indexes == nil {
+		return nil
+	}
+
+	defs := make([]indexDef, len(*r.Indexes))
+	for i, index := range *r.Indexes {
+		defs[i] = indexDef{name: index.Name, path: index.Path}
+	}
+
+	return defs
 }
 
 type dbList struct {
@@ -150,7 +169,7 @@ func (a *api) createDB(c *gin.Context) {
 
 	request, err := decodeDBRequest(body)
 	if err != nil {
-		writeError(c, http.StatusBadRequest, "invalid_request", "Request body must contain only a database name")
+		writeError(c, http.StatusBadRequest, "invalid_request", "Request body must contain a database name and optional indexes")
 
 		return
 	}
@@ -160,11 +179,18 @@ func (a *api) createDB(c *gin.Context) {
 		return
 	}
 
-	if err := a.store.createDB(request.Name); errors.Is(err, errDBExists) {
+	err = a.store.createDB(request.Name, request.indexDefs()...)
+	if errors.Is(err, errDBExists) {
 		writeError(c, http.StatusConflict, "database_exists", "Database already exists")
 
 		return
-	} else if err != nil {
+	}
+	if errors.Is(err, errInvalidIndex) {
+		writeError(c, http.StatusBadRequest, "invalid_request", "Index definitions are invalid")
+
+		return
+	}
+	if err != nil {
 		a.fail(c, "create database", err)
 
 		return

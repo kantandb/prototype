@@ -41,6 +41,38 @@ func TestDatabaseLifecycleHTTP(t *testing.T) {
 	checkResponse(t, res, http.StatusNotFound, `{"error":{"code":"database_not_found","message":"Database does not exist"}}`)
 }
 
+func TestCreateDatabaseIndexesHTTP(t *testing.T) {
+	t.Parallel()
+
+	store, err := openStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("openStore() error = %v", err)
+	}
+	t.Cleanup(func() {
+		if err := store.close(); err != nil {
+			t.Errorf("store.close() error = %v", err)
+		}
+	})
+
+	server := httptest.NewServer(newHandler(store, defaultMaxBodyBytes))
+	t.Cleanup(server.Close)
+
+	res := sendRequest(t, server, http.MethodPost, "/", `{"name":"empty","indexes":[]}`, "application/json")
+	checkResponse(t, res, http.StatusCreated, `{"name":"empty","indexes":[]}`)
+
+	body := `{"name":"users","indexes":[{"name":"email","path":"/email"},{"name":"active","path":"/active"}]}`
+	res = sendRequest(t, server, http.MethodPost, "/", body, "application/json")
+	checkResponse(t, res, http.StatusCreated, body)
+
+	defs, err := store.indexes("users")
+	if err != nil {
+		t.Fatalf("indexes() error = %v", err)
+	}
+	if len(defs) != 2 || defs[0] != (indexDef{name: "active", path: "/active"}) || defs[1] != (indexDef{name: "email", path: "/email"}) {
+		t.Errorf("indexes() = %v, want active and email definitions", defs)
+	}
+}
+
 func TestListDatabasesPaginationHTTP(t *testing.T) {
 	t.Parallel()
 
@@ -89,6 +121,8 @@ func TestListDatabasesValidationHTTP(t *testing.T) {
 func TestCreateDatabaseValidationHTTP(t *testing.T) {
 	t.Parallel()
 
+	indexes := strings.TrimSuffix(strings.Repeat(`{"name":"index","path":"/value"},`, maxIndexes+1), ",")
+	tooManyIndexes := `{"name":"db","indexes":[` + indexes + `]}`
 	tests := []struct {
 		name        string
 		body        string
@@ -103,6 +137,12 @@ func TestCreateDatabaseValidationHTTP(t *testing.T) {
 		{name: "malformed JSON", body: `{"name":`, contentType: "application/json", maxBytes: 100, status: http.StatusBadRequest, code: "invalid_request"},
 		{name: "non-object JSON", body: `[]`, contentType: "application/json", maxBytes: 100, status: http.StatusBadRequest, code: "invalid_request"},
 		{name: "unknown field", body: `{"name":"db","other":true}`, contentType: "application/json", maxBytes: 100, status: http.StatusBadRequest, code: "invalid_request"},
+		{name: "unknown index field", body: `{"name":"db","indexes":[{"name":"email","path":"/email","other":true}]}`, contentType: "application/json", maxBytes: 200, status: http.StatusBadRequest, code: "invalid_request"},
+		{name: "non-array indexes", body: `{"name":"db","indexes":{}}`, contentType: "application/json", maxBytes: 100, status: http.StatusBadRequest, code: "invalid_request"},
+		{name: "duplicate indexes", body: `{"name":"db","indexes":[{"name":"email","path":"/email"},{"name":"email","path":"/other"}]}`, contentType: "application/json", maxBytes: 200, status: http.StatusBadRequest, code: "invalid_request"},
+		{name: "invalid index name", body: `{"name":"db","indexes":[{"name":"Bad","path":"/email"}]}`, contentType: "application/json", maxBytes: 100, status: http.StatusBadRequest, code: "invalid_request"},
+		{name: "invalid index path", body: `{"name":"db","indexes":[{"name":"email","path":"email"}]}`, contentType: "application/json", maxBytes: 100, status: http.StatusBadRequest, code: "invalid_request"},
+		{name: "too many indexes", body: tooManyIndexes, contentType: "application/json", maxBytes: 2000, status: http.StatusBadRequest, code: "invalid_request"},
 		{name: "trailing value", body: `{"name":"db"}{}`, contentType: "application/json", maxBytes: 100, status: http.StatusBadRequest, code: "invalid_request"},
 		{name: "invalid name", body: `{"name":"Bad"}`, contentType: "application/json", maxBytes: 100, status: http.StatusBadRequest, code: "invalid_name"},
 		{name: "too large", body: strings.Repeat("x", 17), contentType: "application/json", maxBytes: 16, status: http.StatusRequestEntityTooLarge, code: "content_too_large"},
