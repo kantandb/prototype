@@ -283,9 +283,31 @@ func TestStoreRangeQueries(t *testing.T) {
 	if more || !slices.Equal(ids, []string{indexTestIDC}) {
 		t.Errorf("queryRangeDocs(next cursor) = %v, %t, want [%s], false", ids, more, indexTestIDC)
 	}
+	ids, more, err = store.queryRangeDocs("db", "value", cmpGE, one, 1, indexTestIDZ)
+	if err != nil {
+		t.Fatalf("queryRangeDocs(final cursor) error = %v", err)
+	}
+	if more || len(ids) != 0 {
+		t.Errorf("queryRangeDocs(final cursor) = %v, %t, want empty, false", ids, more)
+	}
 
 	if _, _, err := store.queryRangeDocs("db", "value", cmpLT, []byte{0x02}, 10, ""); !errors.Is(err, errInvalidIndexValue) {
 		t.Errorf("queryRangeDocs(boolean) error = %v, want %v", err, errInvalidIndexValue)
+	}
+
+	doc, err := store.getDoc("db", indexTestIDB)
+	if err != nil {
+		t.Fatalf("getDoc() error = %v", err)
+	}
+	if err := store.deleteDoc("db", indexTestIDB, matchCond{set: true, revision: doc.revision}); err != nil {
+		t.Fatalf("deleteDoc() error = %v", err)
+	}
+	ids, more, err = store.queryRangeDocs("db", "value", cmpGE, one, 100, "")
+	if err != nil {
+		t.Fatalf("queryRangeDocs(deleted) error = %v", err)
+	}
+	if more || !slices.Equal(ids, []string{indexTestIDC}) {
+		t.Errorf("queryRangeDocs(deleted) = %v, %t, want [%s], false", ids, more, indexTestIDC)
 	}
 }
 
@@ -317,6 +339,13 @@ func TestStoreRangeQueryCorruption(t *testing.T) {
 	}
 	if _, _, err := store.queryRangeDocs("db", "value", cmpGT, encoded, 10, ""); !errors.Is(err, errCorruptData) {
 		t.Errorf("queryRangeDocs(document ID) error = %v, want %v", err, errCorruptData)
+	}
+
+	if err := store.db.Set(indexDefKey("db", "bad"), []byte{0xff}, pebble.Sync); err != nil {
+		t.Fatalf("Set(index definition) error = %v", err)
+	}
+	if _, _, err := store.queryRangeDocs("db", "value", cmpGT, encoded, 10, ""); !errors.Is(err, errCorruptData) {
+		t.Errorf("queryRangeDocs(index definition) error = %v, want %v", err, errCorruptData)
 	}
 }
 

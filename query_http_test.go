@@ -184,12 +184,14 @@ func TestRangeQueryHTTP(t *testing.T) {
 	t.Parallel()
 
 	server := newTestServer(t, defaultMaxBodyBytes)
-	res := sendRequest(t, server, http.MethodPost, "/", `{"name":"scores","indexes":[{"name":"score","path":"/score"}]}`, "application/json")
-	checkResponse(t, res, http.StatusCreated, `{"name":"scores","indexes":[{"name":"score","path":"/score"}]}`)
+	res := sendRequest(t, server, http.MethodPost, "/", `{"name":"scores","indexes":[{"name":"score","path":"/score"},{"name":"rank","path":"/score"}]}`, "application/json")
+	checkResponse(t, res, http.StatusCreated, `{"name":"scores","indexes":[{"name":"score","path":"/score"},{"name":"rank","path":"/score"}]}`)
 
 	createQueryDoc(t, server, "/scores/", `{"score":0}`)
+	firstID := createQueryDoc(t, server, "/scores/", `{"score":10}`)
+	createQueryDoc(t, server, "/scores/", `{}`)
 	want := []string{
-		createQueryDoc(t, server, "/scores/", `{"score":10}`),
+		firstID,
 		createQueryDoc(t, server, "/scores/", `{"score":20}`),
 	}
 	slices.Sort(want)
@@ -219,8 +221,83 @@ func TestRangeQueryHTTP(t *testing.T) {
 		t.Errorf("last page = %+v, want documents %v and no cursor", last, want[1:])
 	}
 
-	res = sendRequest(t, server, http.MethodGet, "/scores?index=score&op=gt&value=10&limit=1&cursor="+cursor, "", "")
+	for _, path := range []string{
+		"/scores?index=score&op=gt&value=10&limit=1&cursor=" + cursor,
+		"/scores?index=score&op=ge&value=11&limit=1&cursor=" + cursor,
+		"/scores?index=rank&op=ge&value=10&limit=1&cursor=" + cursor,
+	} {
+		res = sendRequest(t, server, http.MethodGet, path, "", "")
+		checkResponse(t, res, http.StatusBadRequest, `{"error":{"code":"invalid_cursor","message":"Cursor is invalid"}}`)
+	}
+
+	res = sendRequest(t, server, http.MethodPost, "/", `{"name":"other","indexes":[{"name":"score","path":"/score"}]}`, "application/json")
+	checkResponse(t, res, http.StatusCreated, `{"name":"other","indexes":[{"name":"score","path":"/score"}]}`)
+	res = sendRequest(t, server, http.MethodGet, "/other?index=score&op=ge&value=10&limit=1&cursor="+cursor, "", "")
 	checkResponse(t, res, http.StatusBadRequest, `{"error":{"code":"invalid_cursor","message":"Cursor is invalid"}}`)
+}
+
+func TestRangeSemanticsHTTP(t *testing.T) {
+	t.Parallel()
+
+	server := newTestServer(t, defaultMaxBodyBytes)
+	res := sendRequest(t, server, http.MethodPost, "/", `{"name":"values","indexes":[{"name":"value","path":"/value"}]}`, "application/json")
+	checkResponse(t, res, http.StatusCreated, `{"name":"values","indexes":[{"name":"value","path":"/value"}]}`)
+
+	ids := make(map[string]string)
+	for _, document := range []struct {
+		name string
+		body string
+	}{
+		{name: "negative", body: `{"value":-2.5}`},
+		{name: "one", body: `{"value":1}`},
+		{name: "decimal", body: `{"value":1.0}`},
+		{name: "exponent", body: `{"value":1e0}`},
+		{name: "large", body: `{"value":123456789012345678901234567890}`},
+		{name: "a", body: `{"value":"a"}`},
+		{name: "z", body: `{"value":"z"}`},
+		{name: "unicode", body: `{"value":"é"}`},
+		{name: "boolean", body: `{"value":true}`},
+		{name: "null", body: `{"value":null}`},
+		{name: "missing", body: `{}`},
+		{name: "object", body: `{"value":{}}`},
+		{name: "array", body: `{"value":[]}`},
+	} {
+		ids[document.name] = createQueryDoc(t, server, "/values/", document.body)
+	}
+
+	tests := []struct {
+		name  string
+		op    string
+		value string
+		want  []string
+	}{
+		{name: "number lt", op: "lt", value: "1", want: []string{ids["negative"]}},
+		{name: "number le", op: "le", value: "1e0", want: []string{ids["negative"], ids["one"], ids["decimal"], ids["exponent"]}},
+		{name: "number gt", op: "gt", value: "1.0", want: []string{ids["large"]}},
+		{name: "number ge", op: "ge", value: "1", want: []string{ids["one"], ids["decimal"], ids["exponent"], ids["large"]}},
+		{name: "string lt", op: "lt", value: `"z"`, want: []string{ids["a"]}},
+		{name: "string le", op: "le", value: `"z"`, want: []string{ids["a"], ids["z"]}},
+		{name: "string gt", op: "gt", value: `"z"`, want: []string{ids["unicode"]}},
+		{name: "string ge", op: "ge", value: `"z"`, want: []string{ids["z"], ids["unicode"]}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := "/values?index=value&op=" + tt.op + "&value=" + url.QueryEscape(tt.value)
+			res := sendRequest(t, server, http.MethodGet, path, "", "")
+
+			var page docList
+			if err := json.NewDecoder(res.Body).Decode(&page); err != nil {
+				t.Fatalf("Decode() error = %v", err)
+			}
+			if err := res.Body.Close(); err != nil {
+				t.Errorf("Response.Body.Close() error = %v", err)
+			}
+			slices.Sort(tt.want)
+			if !slices.Equal(page.Documents, tt.want) {
+				t.Errorf("documents = %v, want %v", page.Documents, tt.want)
+			}
+		})
+	}
 }
 
 func TestParseCmpOp(t *testing.T) {
