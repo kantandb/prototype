@@ -171,7 +171,11 @@ func TestStoreIndexesDocuments(t *testing.T) {
 	assertQuery(t, store, "users", "object", "ignored", nil)
 	assertQuery(t, store, "users", "array", "ignored", nil)
 
-	ids, more, err := store.queryDocs("users", "email", "alice@example.com", 1, "")
+	emailValue, err := encodeIndexValue("alice@example.com")
+	if err != nil {
+		t.Fatalf("encodeIndexValue() error = %v", err)
+	}
+	ids, more, err := store.queryDocs("users", "email", emailValue, 1, "")
 	if err != nil {
 		t.Fatalf("queryDocs() error = %v", err)
 	}
@@ -182,7 +186,7 @@ func TestStoreIndexesDocuments(t *testing.T) {
 		t.Errorf("queryDocs() = %v, want %v", ids, want)
 	}
 
-	ids, more, err = store.queryDocs("users", "email", "alice@example.com", 1, indexTestIDA)
+	ids, more, err = store.queryDocs("users", "email", emailValue, 1, indexTestIDA)
 	if err != nil {
 		t.Fatalf("queryDocs(cursor) error = %v", err)
 	}
@@ -193,10 +197,10 @@ func TestStoreIndexesDocuments(t *testing.T) {
 		t.Errorf("queryDocs(cursor) = %v, want %v", ids, want)
 	}
 
-	if _, _, err := store.queryDocs("users", "missing", "value", 10, ""); !errors.Is(err, errIndexNotFound) {
+	if _, _, err := store.queryDocs("users", "missing", nil, 10, ""); !errors.Is(err, errIndexNotFound) {
 		t.Errorf("queryDocs(missing index) error = %v, want %v", err, errIndexNotFound)
 	}
-	if _, _, err := store.queryDocs("missing", "email", "value", 10, ""); !errors.Is(err, errDBNotFound) {
+	if _, _, err := store.queryDocs("missing", "email", nil, 10, ""); !errors.Is(err, errDBNotFound) {
 		t.Errorf("queryDocs(missing database) error = %v, want %v", err, errDBNotFound)
 	}
 }
@@ -351,7 +355,7 @@ func TestStoreRejectsCorruptIndex(t *testing.T) {
 	if err := store.db.Set(entry, []byte{1}, pebble.Sync); err != nil {
 		t.Fatalf("Set(entry) error = %v", err)
 	}
-	if _, _, err := store.queryDocs("db", "name", "value", 10, ""); !errors.Is(err, errCorruptData) {
+	if _, _, err := store.queryDocs("db", "name", value, 10, ""); !errors.Is(err, errCorruptData) {
 		t.Errorf("queryDocs(value) error = %v, want %v", err, errCorruptData)
 	}
 	if err := store.db.Delete(entry, pebble.Sync); err != nil {
@@ -362,7 +366,7 @@ func TestStoreRejectsCorruptIndex(t *testing.T) {
 	if err := store.db.Set(entry, nil, pebble.Sync); err != nil {
 		t.Fatalf("Set(malformed ID) error = %v", err)
 	}
-	if _, _, err := store.queryDocs("db", "name", "value", 10, ""); !errors.Is(err, errCorruptData) {
+	if _, _, err := store.queryDocs("db", "name", value, 10, ""); !errors.Is(err, errCorruptData) {
 		t.Errorf("queryDocs(malformed ID) error = %v, want %v", err, errCorruptData)
 	}
 	if err := store.db.Delete(entry, pebble.Sync); err != nil {
@@ -373,7 +377,7 @@ func TestStoreRejectsCorruptIndex(t *testing.T) {
 	if err := store.db.Set(entry, nil, pebble.Sync); err != nil {
 		t.Fatalf("Set(missing document) error = %v", err)
 	}
-	if _, _, err := store.queryDocs("db", "name", "value", 10, ""); !errors.Is(err, errCorruptData) {
+	if _, _, err := store.queryDocs("db", "name", value, 10, ""); !errors.Is(err, errCorruptData) {
 		t.Errorf("queryDocs(missing document) error = %v, want %v", err, errCorruptData)
 	}
 }
@@ -381,7 +385,11 @@ func TestStoreRejectsCorruptIndex(t *testing.T) {
 func assertQuery(t *testing.T, store *store, database, index string, value any, want []string) {
 	t.Helper()
 
-	got, more, err := store.queryDocs(database, index, value, 100, "")
+	encoded, err := encodeIndexValue(value)
+	if err != nil {
+		t.Fatalf("encodeIndexValue() error = %v", err)
+	}
+	got, more, err := store.queryDocs(database, index, encoded, 100, "")
 	if err != nil {
 		t.Fatalf("queryDocs(%q, %q) error = %v", database, index, err)
 	}

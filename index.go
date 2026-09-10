@@ -338,7 +338,7 @@ func deleteIndexEntries(batch *pebble.Batch, database, id string, values map[str
 	return nil
 }
 
-func (s *store) queryDocs(database, index string, value any, limit int, cursor string) (ids []string, more bool, queryErr error) {
+func (s *store) queryDocs(database, index string, encoded []byte, limit int, cursor string) (ids []string, more bool, queryErr error) {
 	dbMu := s.dbLock(database)
 	dbMu.RLock()
 	defer dbMu.RUnlock()
@@ -359,9 +359,8 @@ func (s *store) queryDocs(database, index string, value any, limit int, cursor s
 		return nil, false, errIndexNotFound
 	}
 
-	encoded, err := encodeIndexValue(value)
-	if err != nil {
-		return nil, false, err
+	if !validIndexValue(encoded) {
+		return nil, false, errInvalidIndexValue
 	}
 	prefix := indexValuePrefix(database, index, encoded)
 	snapshot := s.db.NewSnapshot()

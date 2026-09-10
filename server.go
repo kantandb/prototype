@@ -260,7 +260,7 @@ func (a *api) listDocs(c *gin.Context) {
 			cursor = decoded.id
 		}
 		if err == nil {
-			ids, more, err = a.store.queryDocs(database, query.index, query.value, query.limit, cursor)
+			ids, more, err = a.store.queryDocs(database, query.index, encoded, query.limit, cursor)
 		}
 	} else {
 		ids, more, err = a.store.listDocs(database, query.limit, query.cursor)

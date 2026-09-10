@@ -34,7 +34,7 @@ type queryCursor struct {
 }
 
 func encodeQueryCursor(cursor queryCursor) (string, error) {
-	if err := validateName(cursor.database); err != nil || validateName(cursor.index) != nil || !validCursorValue(cursor.value) || validateID(cursor.id) != nil {
+	if err := validateName(cursor.database); err != nil || validateName(cursor.index) != nil || !validIndexValue(cursor.value) || validateID(cursor.id) != nil {
 		return "", errInvalidQueryCursor
 	}
 
@@ -98,7 +98,7 @@ func decodeQueryCursor(token string) (queryCursor, error) {
 	}
 
 	cursor := queryCursor{database: string(database), index: string(index), value: bytes.Clone(value), id: string(id)}
-	if err := validateName(cursor.database); err != nil || validateName(cursor.index) != nil || !validCursorValue(cursor.value) || validateID(cursor.id) != nil {
+	if err := validateName(cursor.database); err != nil || validateName(cursor.index) != nil || !validIndexValue(cursor.value) || validateID(cursor.id) != nil {
 		return queryCursor{}, errInvalidQueryCursor
 	}
 
@@ -126,7 +126,7 @@ func getQueryCipher() (cipher.AEAD, error) {
 	return queryCipher, queryCipherErr
 }
 
-func validCursorValue(value []byte) bool {
+func validIndexValue(value []byte) bool {
 	if len(value) == 0 || len(value) > maxIndexValue {
 		return false
 	}
