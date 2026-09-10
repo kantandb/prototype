@@ -370,14 +370,20 @@ func (s *store) queryDocs(database, index string, encoded []byte, limit int, cur
 	if err != nil {
 		return nil, false, err
 	}
-	if _, ok := findIndex(defs, index); !ok {
+	def, ok := findIndex(defs, index)
+	if !ok {
 		return nil, false, errIndexNotFound
 	}
 
-	if !validIndexValue(encoded) {
+	pred := predicate{
+		path:  queryPath{dialect: pathJSONPointer, value: def.path},
+		op:    cmpEq,
+		value: encoded,
+	}
+	if !validIndexValue(pred.value) {
 		return nil, false, errInvalidIndexValue
 	}
-	prefix := indexValuePrefix(database, index, encoded)
+	prefix := indexValuePrefix(database, index, pred.value)
 	snapshot := s.db.NewSnapshot()
 	defer func() {
 		if err := snapshot.Close(); err != nil {

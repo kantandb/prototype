@@ -337,14 +337,14 @@ func parseDocQuery(c *gin.Context) (docQuery, bool) {
 		return docQuery{}, false
 	}
 	for name, entries := range values {
-		if name != "limit" && name != "cursor" && name != "index" && name != "value" || len(entries) != 1 {
+		if name != "limit" && name != "cursor" && name != "index" && name != "op" && name != "value" || len(entries) != 1 {
 			writeError(c, http.StatusBadRequest, "invalid_query", "Query is invalid")
 
 			return docQuery{}, false
 		}
 	}
 
-	query := docQuery{limit: defaultListLimit}
+	query := docQuery{op: cmpEq, limit: defaultListLimit}
 	if entries, ok := values["limit"]; ok {
 		limit, err := strconv.Atoi(entries[0])
 		if err != nil || limit < 1 || limit > maxListLimit {
@@ -360,8 +360,14 @@ func parseDocQuery(c *gin.Context) (docQuery, bool) {
 
 	indexes, hasIndex := values["index"]
 	rawValues, hasValue := values["value"]
+	ops, hasOp := values["op"]
 	if hasIndex != hasValue {
 		writeError(c, http.StatusBadRequest, "invalid_query", "Index and value must appear together")
+
+		return docQuery{}, false
+	}
+	if hasOp && !hasIndex {
+		writeError(c, http.StatusBadRequest, "invalid_query", "Operator requires index and value")
 
 		return docQuery{}, false
 	}
@@ -388,11 +394,46 @@ func parseDocQuery(c *gin.Context) (docQuery, bool) {
 
 		return docQuery{}, false
 	}
+	if hasOp {
+		var ok bool
+		query.op, ok = parseCmpOp(ops[0])
+		if !ok {
+			writeError(c, http.StatusBadRequest, "invalid_query", "Operator is invalid")
+
+			return docQuery{}, false
+		}
+	}
+	if query.op != cmpEq {
+		switch value.(type) {
+		case nil, bool:
+			writeError(c, http.StatusBadRequest, "invalid_query", "Operator does not support this value")
+
+			return docQuery{}, false
+		}
+	}
+
 	query.index = indexes[0]
 	query.value = value
 	query.indexed = true
 
 	return query, true
+}
+
+func parseCmpOp(raw string) (cmpOp, bool) {
+	switch raw {
+	case "eq":
+		return cmpEq, true
+	case "lt":
+		return cmpLT, true
+	case "le":
+		return cmpLE, true
+	case "gt":
+		return cmpGT, true
+	case "ge":
+		return cmpGE, true
+	default:
+		return cmpEq, false
+	}
 }
 
 func decodeQueryValue(raw string) (any, error) {

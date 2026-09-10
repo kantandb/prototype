@@ -39,7 +39,7 @@ func TestQueryDocumentsHTTP(t *testing.T) {
 	}
 	slices.Sort(active)
 
-	res = sendRequest(t, server, http.MethodGet, "/users?index=active&value=true&limit=3", "", "")
+	res = sendRequest(t, server, http.MethodGet, "/users?index=active&value=true&op=eq&limit=3", "", "")
 	var exact docList
 	if err := json.NewDecoder(res.Body).Decode(&exact); err != nil {
 		t.Fatalf("Decode() error = %v", err)
@@ -180,6 +180,32 @@ func TestQueryScalarValuesHTTP(t *testing.T) {
 	checkResponse(t, res, http.StatusOK, `{"documents":[],"cursor":""}`)
 }
 
+func TestParseCmpOp(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		raw  string
+		want cmpOp
+		ok   bool
+	}{
+		{raw: "eq", want: cmpEq, ok: true},
+		{raw: "lt", want: cmpLT, ok: true},
+		{raw: "le", want: cmpLE, ok: true},
+		{raw: "gt", want: cmpGT, ok: true},
+		{raw: "ge", want: cmpGE, ok: true},
+		{raw: ""},
+		{raw: "bad"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.raw, func(t *testing.T) {
+			got, ok := parseCmpOp(tt.raw)
+			if got != tt.want || ok != tt.ok {
+				t.Errorf("parseCmpOp(%q) = (%d, %t), want (%d, %t)", tt.raw, got, ok, tt.want, tt.ok)
+			}
+		})
+	}
+}
+
 func TestQueryDocumentsValidationHTTP(t *testing.T) {
 	t.Parallel()
 
@@ -194,6 +220,13 @@ func TestQueryDocumentsValidationHTTP(t *testing.T) {
 	}{
 		{path: "/users?index=active", status: http.StatusBadRequest, code: "invalid_query"},
 		{path: "/users?value=true", status: http.StatusBadRequest, code: "invalid_query"},
+		{path: "/users?op=eq", status: http.StatusBadRequest, code: "invalid_query"},
+		{path: "/users?index=active&value=true&op=bad", status: http.StatusBadRequest, code: "invalid_query"},
+		{path: "/users?index=active&value=true&op=eq&op=eq", status: http.StatusBadRequest, code: "invalid_query"},
+		{path: "/users?index=active&value=true&op=lt", status: http.StatusBadRequest, code: "invalid_query"},
+		{path: "/users?index=active&value=false&op=le", status: http.StatusBadRequest, code: "invalid_query"},
+		{path: "/users?index=active&value=null&op=gt", status: http.StatusBadRequest, code: "invalid_query"},
+		{path: "/users?index=active&value=null&op=ge", status: http.StatusBadRequest, code: "invalid_query"},
 		{path: "/users?index=Bad&value=true", status: http.StatusBadRequest, code: "invalid_query"},
 		{path: "/users?index=active&value=", status: http.StatusBadRequest, code: "invalid_query"},
 		{path: "/users?index=active;value=true", status: http.StatusBadRequest, code: "invalid_query"},
