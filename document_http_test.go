@@ -62,7 +62,7 @@ func TestListDocumentsHTTP(t *testing.T) {
 	checkResponse(t, res, http.StatusCreated, `{"name":"db"}`)
 
 	res = sendRequest(t, server, http.MethodGet, "/db", "", "")
-	checkResponse(t, res, http.StatusOK, `{"documents":[]}`)
+	checkResponse(t, res, http.StatusOK, `{"documents":[],"cursor":""}`)
 
 	var ids []string
 	for range 3 {
@@ -93,6 +93,9 @@ func TestListDocumentsHTTP(t *testing.T) {
 	if !slices.Equal(page.Documents, ids[:2]) {
 		t.Errorf("documents = %v, want %v", page.Documents, ids[:2])
 	}
+	if page.Cursor != ids[1] {
+		t.Errorf("cursor = %q, want %q", page.Cursor, ids[1])
+	}
 
 	res = sendRequest(t, server, http.MethodGet, "/db?limit=1&cursor="+ids[1], "", "")
 	page = docList{}
@@ -105,9 +108,12 @@ func TestListDocumentsHTTP(t *testing.T) {
 	if want := ids[2:]; !slices.Equal(page.Documents, want) {
 		t.Errorf("documents after cursor = %v, want %v", page.Documents, want)
 	}
+	if page.Cursor != "" {
+		t.Errorf("final cursor = %q, want empty", page.Cursor)
+	}
 
 	res = sendRequest(t, server, http.MethodGet, "/db?cursor="+ids[2], "", "")
-	checkResponse(t, res, http.StatusOK, `{"documents":[]}`)
+	checkResponse(t, res, http.StatusOK, `{"documents":[],"cursor":""}`)
 }
 
 func TestListDocumentsValidationHTTP(t *testing.T) {
@@ -126,6 +132,9 @@ func TestListDocumentsValidationHTTP(t *testing.T) {
 		{path: "/db?limit=1001", code: "invalid_limit"},
 		{path: "/db?limit=none", code: "invalid_limit"},
 		{path: "/db?cursor=bad", code: "invalid_cursor"},
+		{path: "/db?unknown=true", code: "invalid_query"},
+		{path: "/db?limit=1&limit=2", code: "invalid_query"},
+		{path: "/db?cursor=&cursor=", code: "invalid_query"},
 	}
 	for _, tt := range tests {
 		res = sendRequest(t, server, http.MethodGet, tt.path, "", "")

@@ -9,8 +9,10 @@ import (
 	"log/slog"
 	"mime"
 	"net/http"
+	"net/url"
 	"runtime/debug"
 	"strconv"
+	"strings"
 	"sync/atomic"
 
 	"github.com/gin-gonic/gin"
@@ -52,6 +54,15 @@ type dbList struct {
 
 type docList struct {
 	Documents []string `json:"documents"`
+	Cursor    string   `json:"cursor"`
+}
+
+type docQuery struct {
+	value   any
+	cursor  string
+	index   string
+	limit   int
+	indexed bool
 }
 
 type docResponse struct {
@@ -227,14 +238,30 @@ func (a *api) listDocs(c *gin.Context) {
 		return
 	}
 
-	limit, cursor, ok := parseListQuery(c, validateID)
+	query, ok := parseDocQuery(c)
 	if !ok {
 		return
 	}
 
-	ids, err := a.store.listDocs(database, limit, cursor)
+	var ids []string
+	var err error
+	if query.indexed {
+		ids, err = a.store.queryDocs(database, query.index, query.value, query.limit+1, query.cursor)
+	} else {
+		ids, err = a.store.listDocs(database, query.limit+1, query.cursor)
+	}
 	if errors.Is(err, errDBNotFound) {
 		writeError(c, http.StatusNotFound, "database_not_found", "Database does not exist")
+
+		return
+	}
+	if errors.Is(err, errIndexNotFound) {
+		writeError(c, http.StatusNotFound, "index_not_found", "Index does not exist")
+
+		return
+	}
+	if errors.Is(err, errInvalidIndexValue) {
+		writeError(c, http.StatusBadRequest, "invalid_query", "Query is invalid")
 
 		return
 	}
@@ -243,11 +270,109 @@ func (a *api) listDocs(c *gin.Context) {
 
 		return
 	}
+
+	ids, cursor := docPage(ids, query.limit)
+	c.JSON(http.StatusOK, docList{Documents: ids, Cursor: cursor})
+}
+
+func parseDocQuery(c *gin.Context) (docQuery, bool) {
+	values, err := url.ParseQuery(c.Request.URL.RawQuery)
+	if err != nil {
+		writeError(c, http.StatusBadRequest, "invalid_query", "Query is invalid")
+
+		return docQuery{}, false
+	}
+	for name, entries := range values {
+		if name != "limit" && name != "cursor" && name != "index" && name != "value" || len(entries) != 1 {
+			writeError(c, http.StatusBadRequest, "invalid_query", "Query is invalid")
+
+			return docQuery{}, false
+		}
+	}
+
+	query := docQuery{limit: defaultListLimit}
+	if entries, ok := values["limit"]; ok {
+		limit, err := strconv.Atoi(entries[0])
+		if err != nil || limit < 1 || limit > maxListLimit {
+			writeError(c, http.StatusBadRequest, "invalid_limit", "Limit must be between 1 and 1000")
+
+			return docQuery{}, false
+		}
+		query.limit = limit
+	}
+	if entries, ok := values["cursor"]; ok {
+		query.cursor = entries[0]
+	}
+
+	indexes, hasIndex := values["index"]
+	rawValues, hasValue := values["value"]
+	if hasIndex != hasValue {
+		writeError(c, http.StatusBadRequest, "invalid_query", "Index and value must appear together")
+
+		return docQuery{}, false
+	}
+	if !hasIndex {
+		if query.cursor != "" {
+			if err := validateID(query.cursor); err != nil {
+				writeError(c, http.StatusBadRequest, "invalid_cursor", "Cursor is invalid")
+
+				return docQuery{}, false
+			}
+		}
+
+		return query, true
+	}
+	if err := validateName(indexes[0]); err != nil {
+		writeError(c, http.StatusBadRequest, "invalid_query", "Index is invalid")
+
+		return docQuery{}, false
+	}
+
+	value, err := decodeQueryValue(rawValues[0])
+	if err != nil {
+		writeError(c, http.StatusBadRequest, "invalid_query", "Value must be one JSON scalar")
+
+		return docQuery{}, false
+	}
+	query.index = indexes[0]
+	query.value = value
+	query.indexed = true
+
+	return query, true
+}
+
+func decodeQueryValue(raw string) (any, error) {
+	decoder := json.NewDecoder(strings.NewReader(raw))
+	decoder.UseNumber()
+
+	var value any
+	if err := decoder.Decode(&value); err != nil {
+		return nil, err
+	}
+	var extra any
+	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
+		return nil, errors.New("multiple JSON values")
+	}
+
+	switch value.(type) {
+	case nil, bool, json.Number, string:
+		return value, nil
+	default:
+		return nil, errors.New("value must be scalar")
+	}
+}
+
+func docPage(ids []string, limit int) ([]string, string) {
 	if ids == nil {
 		ids = []string{}
 	}
+	if len(ids) <= limit {
+		return ids, ""
+	}
 
-	c.JSON(http.StatusOK, docList{Documents: ids})
+	ids = ids[:limit]
+
+	return ids, ids[len(ids)-1]
 }
 
 func parseListQuery(c *gin.Context, validateCursor func(string) error) (int, string, bool) {
