@@ -339,8 +339,9 @@ func deleteIndexEntries(batch *pebble.Batch, database, id string, values map[str
 }
 
 func (s *store) queryDocs(database, index string, value any, limit int, cursor string) (ids []string, queryErr error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	dbMu := s.dbLock(database)
+	dbMu.RLock()
+	defer dbMu.RUnlock()
 
 	exists, err := s.hasDB(database)
 	if err != nil {

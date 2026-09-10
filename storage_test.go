@@ -6,6 +6,7 @@ import (
 	"slices"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/cockroachdb/pebble"
 )
@@ -261,6 +262,207 @@ func TestConcurrentCreateDB(t *testing.T) {
 	}
 	if created != 1 || conflicts != workers-1 {
 		t.Errorf("created = %d, conflicts = %d", created, conflicts)
+	}
+}
+
+func TestConcurrentCreateDoc(t *testing.T) {
+	t.Parallel()
+
+	store := testStore(t)
+	if err := store.createDB("db"); err != nil {
+		t.Fatalf("createDB() error = %v", err)
+	}
+
+	const workers = 8
+	errs := make(chan error, workers)
+	var wg sync.WaitGroup
+	for range workers {
+		wg.Go(func() {
+			_, err := store.createDoc("db", "id", []byte(`{"ok":true}`))
+			errs <- err
+		})
+	}
+	wg.Wait()
+	close(errs)
+
+	var created, conflicts int
+	for err := range errs {
+		switch {
+		case err == nil:
+			created++
+		case errors.Is(err, errDocExists):
+			conflicts++
+		default:
+			t.Fatalf("createDoc() unexpected error = %v", err)
+		}
+	}
+	if created != 1 || conflicts != workers-1 {
+		t.Errorf("created = %d, conflicts = %d", created, conflicts)
+	}
+}
+
+func TestConcurrentConditionalReplace(t *testing.T) {
+	t.Parallel()
+
+	store := testStore(t)
+	if err := store.createDB("db"); err != nil {
+		t.Fatalf("createDB() error = %v", err)
+	}
+	rev, err := store.createDoc("db", "id", []byte(`{"value":0}`))
+	if err != nil {
+		t.Fatalf("createDoc() error = %v", err)
+	}
+
+	const workers = 8
+	errs := make(chan error, workers)
+	var wg sync.WaitGroup
+	for range workers {
+		wg.Go(func() {
+			_, err := store.replaceDoc("db", "id", []byte(`{"value":1}`), matchCond{set: true, revision: rev})
+			errs <- err
+		})
+	}
+	wg.Wait()
+	close(errs)
+
+	var replaced, rejected int
+	for err := range errs {
+		switch {
+		case err == nil:
+			replaced++
+		case errors.Is(err, errPreconditionFailed):
+			rejected++
+		default:
+			t.Fatalf("replaceDoc() unexpected error = %v", err)
+		}
+	}
+	if replaced != 1 || rejected != workers-1 {
+		t.Errorf("replaced = %d, rejected = %d", replaced, rejected)
+	}
+}
+
+func TestDistinctDocsDoNotBlock(t *testing.T) {
+	t.Parallel()
+
+	store := testStore(t)
+	if err := store.createDB("db", indexDef{name: "name", path: "/name"}); err != nil {
+		t.Fatalf("createDB() error = %v", err)
+	}
+	if _, err := store.createDoc("db", "held", []byte(`{"name":"old"}`)); err != nil {
+		t.Fatalf("createDoc() error = %v", err)
+	}
+	if store.docLock("db", "held") == store.docLock("db", "other") {
+		t.Fatal("test documents share a lock stripe")
+	}
+
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	patched := make(chan error, 1)
+	go func() {
+		_, err := store.patchDoc("db", "held", matchCond{}, func([]byte) ([]byte, error) {
+			close(entered)
+			<-release
+
+			return []byte(`{"name":"new"}`), nil
+		})
+		patched <- err
+	}()
+	<-entered
+
+	created := make(chan error, 1)
+	go func() {
+		_, err := store.createDoc("db", "other", []byte(`{"name":"other"}`))
+		created <- err
+	}()
+
+	select {
+	case err := <-created:
+		if err != nil {
+			t.Fatalf("createDoc(other) error = %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("createDoc(other) blocked on distinct document")
+	}
+
+	close(release)
+	if err := <-patched; err != nil {
+		t.Fatalf("patchDoc() error = %v", err)
+	}
+	assertQuery(t, store, "db", "name", "new", []string{"held"})
+	assertQuery(t, store, "db", "name", "other", []string{"other"})
+}
+
+func TestDeleteDBRacesWithWrites(t *testing.T) {
+	t.Parallel()
+
+	store := testStore(t)
+	for range 4 {
+		if err := store.createDB("db", indexDef{name: "name", path: "/name"}); err != nil {
+			t.Fatalf("createDB() error = %v", err)
+		}
+		for _, id := range []string{"replace", "patch", "delete"} {
+			if _, err := store.createDoc("db", id, []byte(`{"name":"old"}`)); err != nil {
+				t.Fatalf("createDoc(%q) error = %v", id, err)
+			}
+		}
+
+		start := make(chan struct{})
+		errs := make(chan error, 5)
+		var wg sync.WaitGroup
+		wg.Go(func() {
+			<-start
+			_, err := store.replaceDoc("db", "replace", []byte(`{"name":"new"}`), matchCond{})
+			errs <- err
+		})
+		wg.Go(func() {
+			<-start
+			_, err := store.patchDoc("db", "patch", matchCond{}, func([]byte) ([]byte, error) {
+				return []byte(`{"name":"new"}`), nil
+			})
+			errs <- err
+		})
+		wg.Go(func() {
+			<-start
+			errs <- store.deleteDoc("db", "delete", matchCond{})
+		})
+		wg.Go(func() {
+			<-start
+			_, err := store.createDoc("db", "create", []byte(`{"name":"new"}`))
+			errs <- err
+		})
+		wg.Go(func() {
+			<-start
+			errs <- store.deleteDB("db")
+		})
+
+		close(start)
+		wg.Wait()
+		close(errs)
+		for err := range errs {
+			if err != nil && !errors.Is(err, errDBNotFound) && !errors.Is(err, errDocNotFound) {
+				t.Fatalf("concurrent mutation error = %v", err)
+			}
+		}
+
+		exists, err := store.hasDB("db")
+		if err != nil {
+			t.Fatalf("hasDB() error = %v", err)
+		}
+		if exists {
+			t.Fatal("database remains after deletion")
+		}
+		for _, prefix := range [][]byte{docsPrefix("db"), indexDefPrefix("db"), indexDataPrefix("db")} {
+			iter, err := store.db.NewIter(&pebble.IterOptions{LowerBound: prefix, UpperBound: prefixEnd(prefix)})
+			if err != nil {
+				t.Fatalf("NewIter() error = %v", err)
+			}
+			if iter.First() {
+				t.Errorf("key remains after database deletion: %x", iter.Key())
+			}
+			if err := iter.Close(); err != nil {
+				t.Fatalf("iterator close error = %v", err)
+			}
+		}
 	}
 }
 

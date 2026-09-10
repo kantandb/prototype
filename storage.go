@@ -30,6 +30,13 @@ var (
 
 const recordVersion byte = 1
 
+const (
+	dbStripeCount  = 64
+	docStripeCount = 256
+	fnvOffset      = 14695981039346656037
+	fnvPrime       = 1099511628211
+)
+
 type revision [16]byte
 
 type storedDoc struct {
@@ -39,7 +46,10 @@ type storedDoc struct {
 
 type store struct {
 	db *pebble.DB
-	mu sync.Mutex // Serializes every mutation.
+
+	// Database locks precede document locks so deletion excludes active writes.
+	dbStripes  [dbStripeCount]sync.RWMutex
+	docStripes [docStripeCount]sync.Mutex
 }
 
 func storeOptions() *pebble.Options {
@@ -72,8 +82,9 @@ func (s *store) createDB(name string, defs ...indexDef) (createErr error) {
 		return err
 	}
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	dbMu := s.dbLock(name)
+	dbMu.Lock()
+	defer dbMu.Unlock()
 
 	exists, err := s.hasDB(name)
 	if err != nil {
@@ -144,8 +155,9 @@ func (s *store) listDBs(limit int, cursor string) (names []string, listErr error
 }
 
 func (s *store) deleteDB(name string) (deleteErr error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	dbMu := s.dbLock(name)
+	dbMu.Lock()
+	defer dbMu.Unlock()
 
 	exists, err := s.hasDB(name)
 	if err != nil {
@@ -185,8 +197,13 @@ func (s *store) deleteDB(name string) (deleteErr error) {
 }
 
 func (s *store) createDoc(database, id string, json []byte) (rev revision, createErr error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	dbMu := s.dbLock(database)
+	dbMu.RLock()
+	defer dbMu.RUnlock()
+
+	docMu := s.docLock(database, id)
+	docMu.Lock()
+	defer docMu.Unlock()
 
 	exists, err := s.hasDB(database)
 	if err != nil {
@@ -243,8 +260,9 @@ func (s *store) getDoc(database, id string) (storedDoc, error) {
 }
 
 func (s *store) listDocs(database string, limit int, cursor string) (ids []string, listErr error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	dbMu := s.dbLock(database)
+	dbMu.RLock()
+	defer dbMu.RUnlock()
 
 	exists, err := s.hasDB(database)
 	if err != nil {
@@ -293,8 +311,13 @@ func (s *store) listDocs(database string, limit int, cursor string) (ids []strin
 }
 
 func (s *store) replaceDoc(database, id string, json []byte, match matchCond) (rev revision, replaceErr error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	dbMu := s.dbLock(database)
+	dbMu.RLock()
+	defer dbMu.RUnlock()
+
+	docMu := s.docLock(database, id)
+	docMu.Lock()
+	defer docMu.Unlock()
 
 	key := docKey(database, id)
 	current, err := s.readDoc(key)
@@ -343,8 +366,13 @@ func (s *store) replaceDoc(database, id string, json []byte, match matchCond) (r
 }
 
 func (s *store) patchDoc(database, id string, match matchCond, apply func([]byte) ([]byte, error)) (doc storedDoc, patchErr error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	dbMu := s.dbLock(database)
+	dbMu.RLock()
+	defer dbMu.RUnlock()
+
+	docMu := s.docLock(database, id)
+	docMu.Lock()
+	defer docMu.Unlock()
 
 	key := docKey(database, id)
 	current, err := s.readDoc(key)
@@ -398,8 +426,13 @@ func (s *store) patchDoc(database, id string, match matchCond, apply func([]byte
 }
 
 func (s *store) deleteDoc(database, id string, match matchCond) (deleteErr error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	dbMu := s.dbLock(database)
+	dbMu.RLock()
+	defer dbMu.RUnlock()
+
+	docMu := s.docLock(database, id)
+	docMu.Lock()
+	defer docMu.Unlock()
 
 	key := docKey(database, id)
 	current, err := s.readDoc(key)
@@ -441,6 +474,26 @@ func (s *store) deleteDoc(database, id string, match matchCond) (deleteErr error
 
 func matchRevision(match matchCond, current revision) bool {
 	return !match.set || match.wildcard || match.revision == current
+}
+
+func (s *store) dbLock(database string) *sync.RWMutex {
+	return &s.dbStripes[hashPart(fnvOffset, database)&(dbStripeCount-1)]
+}
+
+func (s *store) docLock(database, id string) *sync.Mutex {
+	hash := hashPart(fnvOffset, database)
+	hash = hashPart(hashPart(hash, "\x00"), id)
+
+	return &s.docStripes[hash&(docStripeCount-1)]
+}
+
+func hashPart(hash uint64, value string) uint64 {
+	for i := range len(value) {
+		hash ^= uint64(value[i])
+		hash *= fnvPrime
+	}
+
+	return hash
 }
 
 func (s *store) hasDB(name string) (bool, error) {
