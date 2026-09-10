@@ -26,6 +26,13 @@ func TestQueryCursorRoundTrip(t *testing.T) {
 	if strings.Contains(token, "=") {
 		t.Errorf("token %q contains padding", token)
 	}
+	sealed, err := base64.RawURLEncoding.DecodeString(token)
+	if err != nil {
+		t.Fatalf("DecodeString() error = %v", err)
+	}
+	if bytes.Contains(sealed, []byte(want.id)) || bytes.Contains(sealed, want.value) {
+		t.Error("token exposes cursor contents")
+	}
 
 	got, err := decodeQueryCursor(token)
 	if err != nil {
@@ -33,6 +40,25 @@ func TestQueryCursorRoundTrip(t *testing.T) {
 	}
 	if got.index != want.index || !bytes.Equal(got.value, want.value) || got.id != want.id {
 		t.Errorf("decodeQueryCursor() = %+v, want %+v", got, want)
+	}
+}
+
+func TestQueryCursorTampering(t *testing.T) {
+	t.Parallel()
+
+	token, err := encodeQueryCursor(queryCursor{index: "email", value: []byte{0x00}, id: testCursorID})
+	if err != nil {
+		t.Fatalf("encodeQueryCursor() error = %v", err)
+	}
+	sealed, err := base64.RawURLEncoding.DecodeString(token)
+	if err != nil {
+		t.Fatalf("DecodeString() error = %v", err)
+	}
+	sealed[len(sealed)-1] ^= 1
+	token = base64.RawURLEncoding.EncodeToString(sealed)
+
+	if _, err := decodeQueryCursor(token); !errors.Is(err, errInvalidQueryCursor) {
+		t.Errorf("decodeQueryCursor() error = %v, want %v", err, errInvalidQueryCursor)
 	}
 }
 

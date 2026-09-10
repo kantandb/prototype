@@ -2,18 +2,29 @@ package main
 
 import (
 	"bytes"
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/rand"
 	"encoding/base64"
 	"errors"
+	"fmt"
 	"math/big"
+	"sync"
 	"unicode/utf8"
 )
 
 const (
-	queryCursorVersion = 1
-	maxQueryCursorSize = 1 + 10 + 63 + 10 + maxIndexValue + 10 + 36
+	queryCursorVersion          = 1
+	maxQueryCursorSize          = 1 + 10 + 63 + 10 + maxIndexValue + 10 + 36
+	maxEncryptedQueryCursorSize = maxQueryCursorSize + 12 + 16
 )
 
-var errInvalidQueryCursor = errors.New("invalid query cursor")
+var (
+	errInvalidQueryCursor = errors.New("invalid query cursor")
+	queryCipherOnce       sync.Once
+	queryCipher           cipher.AEAD
+	queryCipherErr        error
+)
 
 type queryCursor struct {
 	index string
@@ -31,16 +42,39 @@ func encodeQueryCursor(cursor queryCursor) (string, error) {
 	data = appendPart(data, cursor.value)
 	data = appendPart(data, []byte(cursor.id))
 
-	return base64.RawURLEncoding.EncodeToString(data), nil
+	box, err := getQueryCipher()
+	if err != nil {
+		return "", err
+	}
+	nonce := make([]byte, box.NonceSize())
+	if _, err := rand.Read(nonce); err != nil {
+		return "", fmt.Errorf("generating cursor nonce: %w", err)
+	}
+	sealed := box.Seal(append([]byte(nil), nonce...), nonce, data, nil)
+
+	return base64.RawURLEncoding.EncodeToString(sealed), nil
 }
 
 func decodeQueryCursor(token string) (queryCursor, error) {
-	if token == "" || len(token) > base64.RawURLEncoding.EncodedLen(maxQueryCursorSize) {
+	if token == "" || len(token) > base64.RawURLEncoding.EncodedLen(maxEncryptedQueryCursorSize) {
 		return queryCursor{}, errInvalidQueryCursor
 	}
 
-	data, err := base64.RawURLEncoding.DecodeString(token)
-	if err != nil || base64.RawURLEncoding.EncodeToString(data) != token || len(data) == 0 || len(data) > maxQueryCursorSize || data[0] != queryCursorVersion {
+	sealed, err := base64.RawURLEncoding.DecodeString(token)
+	if err != nil || base64.RawURLEncoding.EncodeToString(sealed) != token || len(sealed) > maxEncryptedQueryCursorSize {
+		return queryCursor{}, errInvalidQueryCursor
+	}
+
+	box, err := getQueryCipher()
+	if err != nil {
+		return queryCursor{}, err
+	}
+	if len(sealed) < box.NonceSize()+box.Overhead() {
+		return queryCursor{}, errInvalidQueryCursor
+	}
+	nonce := sealed[:box.NonceSize()]
+	data, err := box.Open(nil, nonce, sealed[box.NonceSize():], nil)
+	if err != nil || len(data) == 0 || len(data) > maxQueryCursorSize || data[0] != queryCursorVersion {
 		return queryCursor{}, errInvalidQueryCursor
 	}
 
@@ -63,6 +97,27 @@ func decodeQueryCursor(token string) (queryCursor, error) {
 	}
 
 	return cursor, nil
+}
+
+func getQueryCipher() (cipher.AEAD, error) {
+	queryCipherOnce.Do(func() {
+		key := make([]byte, 32)
+		if _, err := rand.Read(key); err != nil {
+			queryCipherErr = fmt.Errorf("generating cursor key: %w", err)
+
+			return
+		}
+
+		block, err := aes.NewCipher(key)
+		if err != nil {
+			queryCipherErr = fmt.Errorf("creating cursor cipher: %w", err)
+
+			return
+		}
+		queryCipher, queryCipherErr = cipher.NewGCM(block)
+	})
+
+	return queryCipher, queryCipherErr
 }
 
 func validCursorValue(value []byte) bool {
