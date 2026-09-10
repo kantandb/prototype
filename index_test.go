@@ -133,6 +133,7 @@ func TestStoreIndexesDocuments(t *testing.T) {
 		{name: "escaped", path: "/profile/a~1b~0c"},
 		{name: "item", path: "/items/0/sku"},
 		{name: "object", path: "/profile"},
+		{name: "array", path: "/items"},
 	}
 	if err := store.createDB("users", defs...); err != nil {
 		t.Fatalf("createDB() error = %v", err)
@@ -161,6 +162,7 @@ func TestStoreIndexesDocuments(t *testing.T) {
 	assertQuery(t, store, "users", "escaped", "yes", []string{"a", "b"})
 	assertQuery(t, store, "users", "item", "first", []string{"a"})
 	assertQuery(t, store, "users", "object", "ignored", nil)
+	assertQuery(t, store, "users", "array", "ignored", nil)
 
 	ids, more, err := store.queryDocs("users", "email", "alice@example.com", 1, "")
 	if err != nil {
@@ -189,6 +191,26 @@ func TestStoreIndexesDocuments(t *testing.T) {
 	}
 	if _, _, err := store.queryDocs("missing", "email", "value", 10, ""); !errors.Is(err, errDBNotFound) {
 		t.Errorf("queryDocs(missing database) error = %v, want %v", err, errDBNotFound)
+	}
+}
+
+func TestStoreRejectsLargeIndexedValue(t *testing.T) {
+	t.Parallel()
+
+	store := testStore(t)
+	if err := store.createDB("db", indexDef{name: "value", path: "/value"}); err != nil {
+		t.Fatalf("createDB() error = %v", err)
+	}
+
+	body, err := json.Marshal(map[string]string{"value": strings.Repeat("x", maxIndexValue)})
+	if err != nil {
+		t.Fatalf("json.Marshal() error = %v", err)
+	}
+	if _, err := store.createDoc("db", "id", body); !errors.Is(err, errInvalidIndexValue) {
+		t.Fatalf("createDoc() error = %v, want %v", err, errInvalidIndexValue)
+	}
+	if _, err := store.getDoc("db", "id"); !errors.Is(err, errDocNotFound) {
+		t.Errorf("getDoc() error = %v, want %v", err, errDocNotFound)
 	}
 }
 
