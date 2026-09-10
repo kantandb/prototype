@@ -364,7 +364,14 @@ func (s *store) queryDocs(database, index string, value any, limit int, cursor s
 		return nil, false, err
 	}
 	prefix := indexValuePrefix(database, index, encoded)
-	iter, err := s.db.NewIter(&pebble.IterOptions{LowerBound: prefix, UpperBound: prefixEnd(prefix)})
+	snapshot := s.db.NewSnapshot()
+	defer func() {
+		if err := snapshot.Close(); err != nil {
+			queryErr = errors.Join(queryErr, wrapStore("closing query snapshot", err))
+		}
+	}()
+
+	iter, err := snapshot.NewIter(&pebble.IterOptions{LowerBound: prefix, UpperBound: prefixEnd(prefix)})
 	if err != nil {
 		return nil, false, wrapStore("creating query iterator", err)
 	}
@@ -384,10 +391,19 @@ func (s *store) queryDocs(database, index string, value any, limit int, cursor s
 	}
 
 	for ; valid && len(ids) <= limit; valid = iter.Next() {
-		if len(iter.Value()) != 0 || len(iter.Key()) <= len(prefix) {
+		id := string(iter.Key()[len(prefix):])
+		if len(iter.Value()) != 0 || validateID(id) != nil {
 			return nil, false, fmt.Errorf("%w: invalid index entry", errCorruptData)
 		}
-		ids = append(ids, string(iter.Key()[len(prefix):]))
+
+		exists, err := snapshotHas(snapshot, docKey(database, id))
+		if err != nil {
+			return nil, false, err
+		}
+		if !exists {
+			return nil, false, fmt.Errorf("%w: index references missing document", errCorruptData)
+		}
+		ids = append(ids, id)
 	}
 	if err := iter.Error(); err != nil {
 		return nil, false, wrapStore("iterating query", err)
@@ -397,4 +413,19 @@ func (s *store) queryDocs(database, index string, value any, limit int, cursor s
 	}
 
 	return ids, false, nil
+}
+
+func snapshotHas(snapshot *pebble.Snapshot, key []byte) (bool, error) {
+	_, closer, err := snapshot.Get(key)
+	if errors.Is(err, pebble.ErrNotFound) {
+		return false, nil
+	}
+	if err != nil {
+		return false, wrapStore("reading query document", err)
+	}
+	if err := closer.Close(); err != nil {
+		return false, wrapStore("closing query document", err)
+	}
+
+	return true, nil
 }

@@ -11,6 +11,13 @@ import (
 	"github.com/cockroachdb/pebble"
 )
 
+const (
+	indexTestIDA = "01950000-0000-7000-8000-000000000001"
+	indexTestIDB = "01950000-0000-7000-8000-000000000002"
+	indexTestIDC = "01950000-0000-7000-8000-000000000003"
+	indexTestIDZ = "01950000-0000-7000-8000-000000000004"
+)
+
 func TestStoreOptionsEnableBloom(t *testing.T) {
 	t.Parallel()
 
@@ -143,24 +150,24 @@ func TestStoreIndexesDocuments(t *testing.T) {
 	}
 
 	documents := map[string]string{
-		"c": `{"email":"other@example.com","active":false}`,
-		"a": `{"email":"alice@example.com","active":true,"empty":null,"profile":{"a/b~c":"yes"},"items":[{"sku":"first"}]}`,
-		"b": `{"email":"alice@example.com","active":true,"profile":{"a/b~c":"yes"}}`,
+		indexTestIDC: `{"email":"other@example.com","active":false}`,
+		indexTestIDA: `{"email":"alice@example.com","active":true,"empty":null,"profile":{"a/b~c":"yes"},"items":[{"sku":"first"}]}`,
+		indexTestIDB: `{"email":"alice@example.com","active":true,"profile":{"a/b~c":"yes"}}`,
 	}
 	for id, document := range documents {
 		if _, err := store.createDoc("users", id, []byte(document)); err != nil {
 			t.Fatalf("createDoc(%q) error = %v", id, err)
 		}
 	}
-	if _, err := store.createDoc("other", "z", []byte(`{"email":"alice@example.com"}`)); err != nil {
+	if _, err := store.createDoc("other", indexTestIDZ, []byte(`{"email":"alice@example.com"}`)); err != nil {
 		t.Fatalf("createDoc(other) error = %v", err)
 	}
 
-	assertQuery(t, store, "users", "email", "alice@example.com", []string{"a", "b"})
-	assertQuery(t, store, "users", "active", true, []string{"a", "b"})
-	assertQuery(t, store, "users", "empty", nil, []string{"a"})
-	assertQuery(t, store, "users", "escaped", "yes", []string{"a", "b"})
-	assertQuery(t, store, "users", "item", "first", []string{"a"})
+	assertQuery(t, store, "users", "email", "alice@example.com", []string{indexTestIDA, indexTestIDB})
+	assertQuery(t, store, "users", "active", true, []string{indexTestIDA, indexTestIDB})
+	assertQuery(t, store, "users", "empty", nil, []string{indexTestIDA})
+	assertQuery(t, store, "users", "escaped", "yes", []string{indexTestIDA, indexTestIDB})
+	assertQuery(t, store, "users", "item", "first", []string{indexTestIDA})
 	assertQuery(t, store, "users", "object", "ignored", nil)
 	assertQuery(t, store, "users", "array", "ignored", nil)
 
@@ -171,18 +178,18 @@ func TestStoreIndexesDocuments(t *testing.T) {
 	if !more {
 		t.Error("queryDocs() more = false, want true")
 	}
-	if want := []string{"a"}; !slices.Equal(ids, want) {
+	if want := []string{indexTestIDA}; !slices.Equal(ids, want) {
 		t.Errorf("queryDocs() = %v, want %v", ids, want)
 	}
 
-	ids, more, err = store.queryDocs("users", "email", "alice@example.com", 1, "a")
+	ids, more, err = store.queryDocs("users", "email", "alice@example.com", 1, indexTestIDA)
 	if err != nil {
 		t.Fatalf("queryDocs(cursor) error = %v", err)
 	}
 	if more {
 		t.Error("queryDocs(cursor) more = true, want false")
 	}
-	if want := []string{"b"}; !slices.Equal(ids, want) {
+	if want := []string{indexTestIDB}; !slices.Equal(ids, want) {
 		t.Errorf("queryDocs(cursor) = %v, want %v", ids, want)
 	}
 
@@ -222,32 +229,32 @@ func TestStoreMaintainsIndexes(t *testing.T) {
 		t.Fatalf("createDB() error = %v", err)
 	}
 
-	rev, err := store.createDoc("db", "id", []byte(`{"name":"first"}`))
+	rev, err := store.createDoc("db", indexTestIDA, []byte(`{"name":"first"}`))
 	if err != nil {
 		t.Fatalf("createDoc() error = %v", err)
 	}
-	if _, err := store.replaceDoc("db", "id", []byte(`{"name":"blocked"}`), matchCond{set: true, revision: revision{1}}); !errors.Is(err, errPreconditionFailed) {
+	if _, err := store.replaceDoc("db", indexTestIDA, []byte(`{"name":"blocked"}`), matchCond{set: true, revision: revision{1}}); !errors.Is(err, errPreconditionFailed) {
 		t.Fatalf("replaceDoc(stale) error = %v, want %v", err, errPreconditionFailed)
 	}
-	assertQuery(t, store, "db", "name", "first", []string{"id"})
+	assertQuery(t, store, "db", "name", "first", []string{indexTestIDA})
 
-	newRev, err := store.replaceDoc("db", "id", []byte(`{"name":"second"}`), matchCond{set: true, revision: rev})
+	newRev, err := store.replaceDoc("db", indexTestIDA, []byte(`{"name":"second"}`), matchCond{set: true, revision: rev})
 	if err != nil {
 		t.Fatalf("replaceDoc() error = %v", err)
 	}
 	assertQuery(t, store, "db", "name", "first", nil)
-	assertQuery(t, store, "db", "name", "second", []string{"id"})
+	assertQuery(t, store, "db", "name", "second", []string{indexTestIDA})
 
-	doc, err := store.patchDoc("db", "id", matchCond{set: true, revision: newRev}, func([]byte) ([]byte, error) {
+	doc, err := store.patchDoc("db", indexTestIDA, matchCond{set: true, revision: newRev}, func([]byte) ([]byte, error) {
 		return []byte(`{"name":"third"}`), nil
 	})
 	if err != nil {
 		t.Fatalf("patchDoc() error = %v", err)
 	}
 	assertQuery(t, store, "db", "name", "second", nil)
-	assertQuery(t, store, "db", "name", "third", []string{"id"})
+	assertQuery(t, store, "db", "name", "third", []string{indexTestIDA})
 
-	if err := store.deleteDoc("db", "id", matchCond{set: true, revision: doc.revision}); err != nil {
+	if err := store.deleteDoc("db", indexTestIDA, matchCond{set: true, revision: doc.revision}); err != nil {
 		t.Fatalf("deleteDoc() error = %v", err)
 	}
 	assertQuery(t, store, "db", "name", "third", nil)
@@ -264,7 +271,7 @@ func TestStorePersistsIndexes(t *testing.T) {
 	if err := store.createDB("db", indexDef{name: "number", path: "/number"}); err != nil {
 		t.Fatalf("createDB() error = %v", err)
 	}
-	if _, err := store.createDoc("db", "id", []byte(`{"number":1.0}`)); err != nil {
+	if _, err := store.createDoc("db", indexTestIDA, []byte(`{"number":1.0}`)); err != nil {
 		t.Fatalf("createDoc() error = %v", err)
 	}
 	if err := store.close(); err != nil {
@@ -288,7 +295,7 @@ func TestStorePersistsIndexes(t *testing.T) {
 	if len(defs) != 1 || defs[0].name != "number" || defs[0].path != "/number" {
 		t.Errorf("indexes() = %+v, want number definition", defs)
 	}
-	assertQuery(t, store, "db", "number", json.Number("1e0"), []string{"id"})
+	assertQuery(t, store, "db", "number", json.Number("1e0"), []string{indexTestIDA})
 }
 
 func TestDeleteDBDeletesIndexes(t *testing.T) {
@@ -340,11 +347,34 @@ func TestStoreRejectsCorruptIndex(t *testing.T) {
 	if err != nil {
 		t.Fatalf("encodeIndexValue() error = %v", err)
 	}
-	if err := store.db.Set(indexKey("db", "name", value, "id"), []byte{1}, pebble.Sync); err != nil {
+	entry := indexKey("db", "name", value, indexTestIDA)
+	if err := store.db.Set(entry, []byte{1}, pebble.Sync); err != nil {
 		t.Fatalf("Set(entry) error = %v", err)
 	}
 	if _, _, err := store.queryDocs("db", "name", "value", 10, ""); !errors.Is(err, errCorruptData) {
-		t.Errorf("queryDocs() error = %v, want %v", err, errCorruptData)
+		t.Errorf("queryDocs(value) error = %v, want %v", err, errCorruptData)
+	}
+	if err := store.db.Delete(entry, pebble.Sync); err != nil {
+		t.Fatalf("Delete(entry) error = %v", err)
+	}
+
+	entry = indexKey("db", "name", value, "bad")
+	if err := store.db.Set(entry, nil, pebble.Sync); err != nil {
+		t.Fatalf("Set(malformed ID) error = %v", err)
+	}
+	if _, _, err := store.queryDocs("db", "name", "value", 10, ""); !errors.Is(err, errCorruptData) {
+		t.Errorf("queryDocs(malformed ID) error = %v, want %v", err, errCorruptData)
+	}
+	if err := store.db.Delete(entry, pebble.Sync); err != nil {
+		t.Fatalf("Delete(malformed ID) error = %v", err)
+	}
+
+	entry = indexKey("db", "name", value, indexTestIDA)
+	if err := store.db.Set(entry, nil, pebble.Sync); err != nil {
+		t.Fatalf("Set(missing document) error = %v", err)
+	}
+	if _, _, err := store.queryDocs("db", "name", "value", 10, ""); !errors.Is(err, errCorruptData) {
+		t.Errorf("queryDocs(missing document) error = %v, want %v", err, errCorruptData)
 	}
 }
 

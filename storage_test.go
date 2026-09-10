@@ -353,14 +353,19 @@ func TestConcurrentConditionalReplace(t *testing.T) {
 func TestDistinctDocsDoNotBlock(t *testing.T) {
 	t.Parallel()
 
+	const (
+		heldID  = "01950000-0000-7000-8000-000000000001"
+		otherID = "01950000-0000-7000-8000-000000000002"
+	)
+
 	store := testStore(t)
 	if err := store.createDB("db", indexDef{name: "name", path: "/name"}); err != nil {
 		t.Fatalf("createDB() error = %v", err)
 	}
-	if _, err := store.createDoc("db", "held", []byte(`{"name":"old"}`)); err != nil {
+	if _, err := store.createDoc("db", heldID, []byte(`{"name":"old"}`)); err != nil {
 		t.Fatalf("createDoc() error = %v", err)
 	}
-	if store.docLock("db", "held") == store.docLock("db", "other") {
+	if store.docLock("db", heldID) == store.docLock("db", otherID) {
 		t.Fatal("test documents share a lock stripe")
 	}
 
@@ -368,7 +373,7 @@ func TestDistinctDocsDoNotBlock(t *testing.T) {
 	release := make(chan struct{})
 	patched := make(chan error, 1)
 	go func() {
-		_, err := store.patchDoc("db", "held", matchCond{}, func([]byte) ([]byte, error) {
+		_, err := store.patchDoc("db", heldID, matchCond{}, func([]byte) ([]byte, error) {
 			close(entered)
 			<-release
 
@@ -380,7 +385,7 @@ func TestDistinctDocsDoNotBlock(t *testing.T) {
 
 	created := make(chan error, 1)
 	go func() {
-		_, err := store.createDoc("db", "other", []byte(`{"name":"other"}`))
+		_, err := store.createDoc("db", otherID, []byte(`{"name":"other"}`))
 		created <- err
 	}()
 
@@ -397,8 +402,8 @@ func TestDistinctDocsDoNotBlock(t *testing.T) {
 	if err := <-patched; err != nil {
 		t.Fatalf("patchDoc() error = %v", err)
 	}
-	assertQuery(t, store, "db", "name", "new", []string{"held"})
-	assertQuery(t, store, "db", "name", "other", []string{"other"})
+	assertQuery(t, store, "db", "name", "new", []string{heldID})
+	assertQuery(t, store, "db", "name", "other", []string{otherID})
 }
 
 func TestDeleteDBRacesWithWrites(t *testing.T) {
