@@ -248,16 +248,12 @@ func (a *api) listDocs(c *gin.Context) {
 	var more bool
 	var err error
 	if query.indexed {
-		encoded, err = encodeIndexValue(query.value)
-		cursor := ""
-		if err == nil && query.cursor != "" {
-			decoded, decodeErr := decodeQueryCursor(query.cursor)
-			if decodeErr != nil || decoded.database != database || decoded.index != query.index || !bytes.Equal(decoded.value, encoded) {
-				writeError(c, http.StatusBadRequest, "invalid_cursor", "Cursor is invalid")
+		var cursor string
+		encoded, cursor, err = queryStart(database, query)
+		if errors.Is(err, errInvalidQueryCursor) {
+			writeError(c, http.StatusBadRequest, "invalid_cursor", "Cursor is invalid")
 
-				return
-			}
-			cursor = decoded.id
+			return
 		}
 		if err == nil {
 			ids, more, err = a.store.queryDocs(database, query.index, encoded, query.limit, cursor)
@@ -303,6 +299,23 @@ func (a *api) listDocs(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, docList{Documents: ids, Cursor: cursor})
+}
+
+func queryStart(database string, query docQuery) ([]byte, string, error) {
+	encoded, err := encodeIndexValue(query.value)
+	if err != nil {
+		return nil, "", err
+	}
+	if query.cursor == "" {
+		return encoded, "", nil
+	}
+
+	cursor, err := decodeQueryCursor(query.cursor)
+	if err != nil || cursor.database != database || cursor.index != query.index || !bytes.Equal(cursor.value, encoded) {
+		return nil, "", errInvalidQueryCursor
+	}
+
+	return encoded, cursor.id, nil
 }
 
 func parseDocQuery(c *gin.Context) (docQuery, bool) {
