@@ -139,6 +139,7 @@ func TestCreateDatabaseValidationHTTP(t *testing.T) {
 		{name: "unknown field", body: `{"name":"db","other":true}`, contentType: "application/json", maxBytes: 100, status: http.StatusBadRequest, code: "invalid_request"},
 		{name: "unknown index field", body: `{"name":"db","indexes":[{"name":"email","path":"/email","other":true}]}`, contentType: "application/json", maxBytes: 200, status: http.StatusBadRequest, code: "invalid_request"},
 		{name: "non-array indexes", body: `{"name":"db","indexes":{}}`, contentType: "application/json", maxBytes: 100, status: http.StatusBadRequest, code: "invalid_request"},
+		{name: "null indexes", body: `{"name":"db","indexes":null}`, contentType: "application/json", maxBytes: 100, status: http.StatusBadRequest, code: "invalid_request"},
 		{name: "duplicate indexes", body: `{"name":"db","indexes":[{"name":"email","path":"/email"},{"name":"email","path":"/other"}]}`, contentType: "application/json", maxBytes: 200, status: http.StatusBadRequest, code: "invalid_request"},
 		{name: "invalid index name", body: `{"name":"db","indexes":[{"name":"Bad","path":"/email"}]}`, contentType: "application/json", maxBytes: 100, status: http.StatusBadRequest, code: "invalid_request"},
 		{name: "invalid index path", body: `{"name":"db","indexes":[{"name":"email","path":"email"}]}`, contentType: "application/json", maxBytes: 100, status: http.StatusBadRequest, code: "invalid_request"},

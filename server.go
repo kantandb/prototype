@@ -724,6 +724,16 @@ func decodeDBRequest(body []byte) (dbRequest, error) {
 		return dbRequest{}, err
 	}
 
+	var fields struct {
+		Indexes json.RawMessage `json:"indexes"`
+	}
+	if err := json.Unmarshal(body, &fields); err != nil {
+		return dbRequest{}, err
+	}
+	if bytes.Equal(bytes.TrimSpace(fields.Indexes), []byte("null")) {
+		return dbRequest{}, errors.New("indexes must be an array")
+	}
+
 	return request, nil
 }
 
