@@ -28,6 +28,21 @@ const (
 	maxIndexValue = 4 << 10
 )
 
+type pathDialect byte
+
+const pathJSONPointer pathDialect = iota
+
+type queryPath struct {
+	dialect pathDialect
+	value   string
+}
+
+type predicate struct {
+	path  queryPath
+	op    cmpOp
+	value []byte
+}
+
 type indexDef struct {
 	name string
 	path string

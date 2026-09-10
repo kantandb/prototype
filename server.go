@@ -57,10 +57,21 @@ type docList struct {
 	Cursor    string   `json:"cursor"`
 }
 
+type cmpOp byte
+
+const (
+	cmpEq cmpOp = iota
+	cmpLT
+	cmpLE
+	cmpGT
+	cmpGE
+)
+
 type docQuery struct {
 	value   any
 	cursor  string
 	index   string
+	op      cmpOp
 	limit   int
 	indexed bool
 }
