@@ -67,6 +67,10 @@ const (
 	cmpGE
 )
 
+func (op cmpOp) valid() bool {
+	return op <= cmpGE
+}
+
 type docQuery struct {
 	value   any
 	cursor  string
@@ -299,7 +303,7 @@ func (a *api) listDocs(c *gin.Context) {
 
 	cursor := ""
 	if more && query.indexed {
-		cursor, err = encodeQueryCursor(queryCursor{database: database, index: query.index, value: encoded, id: ids[len(ids)-1]})
+		cursor, err = encodeQueryCursor(queryCursor{database: database, index: query.index, op: query.op, value: encoded, id: ids[len(ids)-1]})
 		if err != nil {
 			a.fail(c, "encode query cursor", err)
 
@@ -322,7 +326,7 @@ func queryStart(database string, query docQuery) ([]byte, string, error) {
 	}
 
 	cursor, err := decodeQueryCursor(query.cursor)
-	if err != nil || cursor.database != database || cursor.index != query.index || !bytes.Equal(cursor.value, encoded) {
+	if err != nil || cursor.database != database || cursor.index != query.index || cursor.op != query.op || !bytes.Equal(cursor.value, encoded) {
 		return nil, "", errInvalidQueryCursor
 	}
 
