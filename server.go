@@ -270,10 +270,12 @@ func (a *api) listDocs(c *gin.Context) {
 
 			return
 		}
-		if err == nil && query.op == cmpEq {
-			ids, more, err = a.store.queryDocs(database, query.index, encoded, query.limit, cursor)
-		} else if err == nil {
-			err = errInvalidIndexValue
+		if err == nil {
+			if query.op == cmpEq {
+				ids, more, err = a.store.queryDocs(database, query.index, encoded, query.limit, cursor)
+			} else {
+				ids, more, err = a.store.queryRangeDocs(database, query.index, query.op, encoded, query.limit, cursor)
+			}
 		}
 	} else {
 		ids, more, err = a.store.listDocs(database, query.limit, query.cursor)

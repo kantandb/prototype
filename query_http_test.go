@@ -180,6 +180,49 @@ func TestQueryScalarValuesHTTP(t *testing.T) {
 	checkResponse(t, res, http.StatusOK, `{"documents":[],"cursor":""}`)
 }
 
+func TestRangeQueryHTTP(t *testing.T) {
+	t.Parallel()
+
+	server := newTestServer(t, defaultMaxBodyBytes)
+	res := sendRequest(t, server, http.MethodPost, "/", `{"name":"scores","indexes":[{"name":"score","path":"/score"}]}`, "application/json")
+	checkResponse(t, res, http.StatusCreated, `{"name":"scores","indexes":[{"name":"score","path":"/score"}]}`)
+
+	createQueryDoc(t, server, "/scores/", `{"score":0}`)
+	want := []string{
+		createQueryDoc(t, server, "/scores/", `{"score":10}`),
+		createQueryDoc(t, server, "/scores/", `{"score":20}`),
+	}
+	slices.Sort(want)
+
+	res = sendRequest(t, server, http.MethodGet, "/scores?index=score&op=ge&value=10&limit=1", "", "")
+	var first docList
+	if err := json.NewDecoder(res.Body).Decode(&first); err != nil {
+		t.Fatalf("Decode() error = %v", err)
+	}
+	if err := res.Body.Close(); err != nil {
+		t.Errorf("Response.Body.Close() error = %v", err)
+	}
+	if !slices.Equal(first.Documents, want[:1]) || first.Cursor == "" {
+		t.Errorf("first page = %+v, want documents %v and cursor", first, want[:1])
+	}
+
+	cursor := url.QueryEscape(first.Cursor)
+	res = sendRequest(t, server, http.MethodGet, "/scores?index=score&op=ge&value=10&limit=1&cursor="+cursor, "", "")
+	var last docList
+	if err := json.NewDecoder(res.Body).Decode(&last); err != nil {
+		t.Fatalf("Decode() error = %v", err)
+	}
+	if err := res.Body.Close(); err != nil {
+		t.Errorf("Response.Body.Close() error = %v", err)
+	}
+	if !slices.Equal(last.Documents, want[1:]) || last.Cursor != "" {
+		t.Errorf("last page = %+v, want documents %v and no cursor", last, want[1:])
+	}
+
+	res = sendRequest(t, server, http.MethodGet, "/scores?index=score&op=gt&value=10&limit=1&cursor="+cursor, "", "")
+	checkResponse(t, res, http.StatusBadRequest, `{"error":{"code":"invalid_cursor","message":"Cursor is invalid"}}`)
+}
+
 func TestParseCmpOp(t *testing.T) {
 	t.Parallel()
 
