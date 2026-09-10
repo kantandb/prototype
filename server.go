@@ -487,6 +487,11 @@ func (a *api) createDoc(c *gin.Context) {
 
 		return
 	}
+	if errors.Is(err, errInvalidIndexValue) {
+		writeError(c, http.StatusBadRequest, "invalid_document", "An indexed value exceeds the size limit")
+
+		return
+	}
 	if err != nil {
 		a.fail(c, "create document", err)
 
@@ -571,6 +576,11 @@ func (a *api) replaceDoc(c *gin.Context) {
 
 		return
 	}
+	if errors.Is(err, errInvalidIndexValue) {
+		writeError(c, http.StatusBadRequest, "invalid_document", "An indexed value exceeds the size limit")
+
+		return
+	}
 	if err != nil {
 		a.fail(c, "replace document", err)
 
@@ -631,6 +641,11 @@ func (a *api) patchDoc(c *gin.Context) {
 	}
 	if errors.Is(err, errInvalidPatch) {
 		writeError(c, http.StatusBadRequest, "invalid_patch", "Patch is invalid or produces a non-object document")
+
+		return
+	}
+	if errors.Is(err, errInvalidIndexValue) {
+		writeError(c, http.StatusBadRequest, "invalid_patch", "An indexed value exceeds the size limit")
 
 		return
 	}

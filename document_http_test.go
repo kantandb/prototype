@@ -154,6 +154,28 @@ func TestListDocumentsValidationHTTP(t *testing.T) {
 	checkResponse(t, res, http.StatusNotFound, `{"error":{"code":"database_not_found","message":"Database does not exist"}}`)
 }
 
+func TestOversizedIndexedValueHTTP(t *testing.T) {
+	t.Parallel()
+
+	server := newTestServer(t, defaultMaxBodyBytes)
+	res := sendRequest(t, server, http.MethodPost, "/", `{"name":"db","indexes":[{"name":"value","path":"/value"}]}`, "application/json")
+	checkResponse(t, res, http.StatusCreated, `{"name":"db","indexes":[{"name":"value","path":"/value"}]}`)
+
+	large := `{"value":"` + strings.Repeat("x", maxIndexValue) + `"}`
+	res = sendRequest(t, server, http.MethodPost, "/db/", large, "application/json")
+	checkResponse(t, res, http.StatusBadRequest, `{"error":{"code":"invalid_document","message":"An indexed value exceeds the size limit"}}`)
+
+	id := createQueryDoc(t, server, "/db/", `{"value":"ok"}`)
+	res = sendRequest(t, server, http.MethodPut, "/db/"+id, large, "application/json")
+	checkResponse(t, res, http.StatusBadRequest, `{"error":{"code":"invalid_document","message":"An indexed value exceeds the size limit"}}`)
+
+	res = sendRequest(t, server, http.MethodPatch, "/db/"+id, large, "application/merge-patch+json")
+	checkResponse(t, res, http.StatusBadRequest, `{"error":{"code":"invalid_patch","message":"An indexed value exceeds the size limit"}}`)
+
+	res = sendRequest(t, server, http.MethodGet, "/db/"+id, "", "")
+	checkResponse(t, res, http.StatusOK, `{"value":"ok"}`)
+}
+
 func TestCreateDocumentValidationHTTP(t *testing.T) {
 	t.Parallel()
 

@@ -13,17 +13,22 @@ mise run build
 # Check health.
 xh GET localhost:8080/healthz
 
-# Create a database.
-xh POST localhost:8080/ name=example
+# Create a database with an email index.
+xh POST localhost:8080/ name=example \
+  indexes:='[{"name":"email","path":"/email"}]'
 
 # List databases, optionally after a cursor.
 xh GET localhost:8080/ limit==100 cursor==example
 
 # Create a document.
-xh POST localhost:8080/example/ name=KantanDB active:=true
+xh POST localhost:8080/example/ name=KantanDB \
+  email=alice@example.com active:=true
 
 # List document IDs, optionally after a cursor.
 xh GET localhost:8080/example limit==100 cursor==01950000-0000-7000-8000-000000000001
+
+# Query the email index. value is a JSON string.
+xh GET localhost:8080/example index==email value=='"alice@example.com"' limit==100
 
 # Read a document using the returned ID.
 xh GET localhost:8080/example/01950000-0000-7000-8000-000000000001
