@@ -37,6 +37,21 @@ func TestQueryDocumentsHTTP(t *testing.T) {
 	}
 	slices.Sort(active)
 
+	res = sendRequest(t, server, http.MethodGet, "/users?index=active&value=true&limit=3", "", "")
+	var exact docList
+	if err := json.NewDecoder(res.Body).Decode(&exact); err != nil {
+		t.Fatalf("Decode() error = %v", err)
+	}
+	if err := res.Body.Close(); err != nil {
+		t.Errorf("Response.Body.Close() error = %v", err)
+	}
+	if !slices.Equal(exact.Documents, active) {
+		t.Errorf("exact-limit documents = %v, want %v", exact.Documents, active)
+	}
+	if exact.Cursor != "" {
+		t.Errorf("exact-limit cursor = %q, want empty", exact.Cursor)
+	}
+
 	res = sendRequest(t, server, http.MethodGet, "/users?index=active&value=true&limit=1", "", "")
 	var page docList
 	if err := json.NewDecoder(res.Body).Decode(&page); err != nil {
