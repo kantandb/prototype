@@ -435,6 +435,166 @@ func (s *store) queryDocs(database, index string, encoded []byte, limit int, cur
 	return ids, false, nil
 }
 
+func (s *store) queryRangeDocs(database, index string, op cmpOp, encoded []byte, limit int, cursor string) (ids []string, more bool, queryErr error) {
+	dbMu := s.dbLock(database)
+	dbMu.RLock()
+	defer dbMu.RUnlock()
+
+	exists, err := s.hasDB(database)
+	if err != nil {
+		return nil, false, fmt.Errorf("checking database: %w", err)
+	}
+	if !exists {
+		return nil, false, errDBNotFound
+	}
+
+	defs, err := s.indexes(database)
+	if err != nil {
+		return nil, false, err
+	}
+	def, ok := findIndex(defs, index)
+	if !ok {
+		return nil, false, errIndexNotFound
+	}
+
+	pred := predicate{
+		path:  queryPath{dialect: pathJSONPointer, value: def.path},
+		op:    op,
+		value: encoded,
+	}
+	if !validRangePred(pred) {
+		return nil, false, errInvalidIndexValue
+	}
+
+	prefix := docsPrefix(database)
+	snapshot := s.db.NewSnapshot()
+	defer func() {
+		if err := snapshot.Close(); err != nil {
+			queryErr = errors.Join(queryErr, wrapStore("closing range query snapshot", err))
+		}
+	}()
+
+	iter, err := snapshot.NewIter(&pebble.IterOptions{LowerBound: prefix, UpperBound: prefixEnd(prefix)})
+	if err != nil {
+		return nil, false, wrapStore("creating range query iterator", err)
+	}
+	defer func() {
+		if err := iter.Close(); err != nil {
+			queryErr = errors.Join(queryErr, wrapStore("closing range query iterator", err))
+		}
+	}()
+
+	valid := iter.First()
+	if cursor != "" {
+		key := docKey(database, cursor)
+		valid = iter.SeekGE(key)
+		if valid && bytes.Equal(iter.Key(), key) {
+			valid = iter.Next()
+		}
+	}
+
+	for ; valid && len(ids) <= limit; valid = iter.Next() {
+		id := string(iter.Key()[len(prefix):])
+		if validateID(id) != nil {
+			return nil, false, fmt.Errorf("%w: invalid document ID", errCorruptData)
+		}
+
+		root, err := queryDocRoot(iter.Value())
+		if err != nil {
+			return nil, false, fmt.Errorf("%w: document %q: %v", errCorruptData, id, err)
+		}
+		value, ok := pointerValue(root, pred.path.value)
+		if !ok {
+			continue
+		}
+		match, err := rangeMatch(value, pred)
+		if err != nil {
+			return nil, false, fmt.Errorf("%w: document %q: %v", errCorruptData, id, err)
+		}
+		if match {
+			ids = append(ids, id)
+		}
+	}
+	if err := iter.Error(); err != nil {
+		return nil, false, wrapStore("iterating range query", err)
+	}
+	if len(ids) > limit {
+		return ids[:limit], true, nil
+	}
+
+	return ids, false, nil
+}
+
+func validRangePred(pred predicate) bool {
+	if pred.path.dialect != pathJSONPointer || !pred.op.valid() || pred.op == cmpEq || !validIndexValue(pred.value) {
+		return false
+	}
+
+	return pred.value[0] == 0x03 || pred.value[0] == 0x04
+}
+
+func queryDocRoot(value []byte) (map[string]any, error) {
+	doc, err := decodeDoc(value)
+	if err != nil {
+		return nil, err
+	}
+
+	decoder := json.NewDecoder(bytes.NewReader(doc.json))
+	decoder.UseNumber()
+
+	var root map[string]any
+	if err := decoder.Decode(&root); err != nil {
+		return nil, err
+	}
+	if err := ensureJSONEnd(decoder); err != nil {
+		return nil, err
+	}
+
+	return root, nil
+}
+
+func rangeMatch(value any, pred predicate) (bool, error) {
+	var comparison int
+
+	switch pred.value[0] {
+	case 0x03:
+		number, ok := value.(json.Number)
+		if !ok {
+			return false, nil
+		}
+		left, ok := new(big.Rat).SetString(string(number))
+		if !ok {
+			return false, errors.New("invalid document number")
+		}
+		right, ok := new(big.Rat).SetString(string(pred.value[1:]))
+		if !ok {
+			return false, errors.New("invalid query number")
+		}
+		comparison = left.Cmp(right)
+	case 0x04:
+		text, ok := value.(string)
+		if !ok {
+			return false, nil
+		}
+		comparison = bytes.Compare([]byte(text), pred.value[1:])
+	default:
+		return false, nil
+	}
+
+	switch pred.op {
+	case cmpLT:
+		return comparison < 0, nil
+	case cmpLE:
+		return comparison <= 0, nil
+	case cmpGT:
+		return comparison > 0, nil
+	case cmpGE:
+		return comparison >= 0, nil
+	default:
+		return false, errors.New("invalid comparison operator")
+	}
+}
+
 func snapshotHas(snapshot *pebble.Snapshot, key []byte) (bool, error) {
 	_, closer, err := snapshot.Get(key)
 	if errors.Is(err, pebble.ErrNotFound) {
