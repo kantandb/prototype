@@ -6,6 +6,7 @@ import (
 	"crypto/cipher"
 	"crypto/rand"
 	"encoding/base64"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"sync"
@@ -182,6 +183,15 @@ func validSortableNumber(value []byte) bool {
 	}
 
 	negative := value[0] == 0x00
+	orderedExponent := binary.BigEndian.Uint64(value[1:9])
+	if negative {
+		orderedExponent = ^orderedExponent
+	}
+	exponent := int64(orderedExponent ^ (uint64(1) << 63))
+	if exponent < -maxIndexValue || exponent > maxIndexValue || len(value)-10 > maxIndexValue {
+		return false
+	}
+
 	terminator, zero := byte(0x00), byte(0x01)
 	if negative {
 		terminator, zero = 0xff, 0xfe

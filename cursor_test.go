@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/base64"
+	"encoding/binary"
 	"errors"
 	"strings"
 	"testing"
@@ -77,6 +78,16 @@ func TestQueryCursorTampering(t *testing.T) {
 
 	if _, err := decodeQueryCursor(token); !errors.Is(err, errInvalidQueryCursor) {
 		t.Errorf("decodeQueryCursor() error = %v, want %v", err, errInvalidQueryCursor)
+	}
+}
+
+func TestSortableNumberValidation(t *testing.T) {
+	t.Parallel()
+
+	value := valueForCursor(t, 1)
+	binary.BigEndian.PutUint64(value[2:10], uint64(maxIndexValue+1)^(uint64(1)<<63))
+	if validIndexValue(value) {
+		t.Error("validIndexValue() accepted an unreachable exponent")
 	}
 }
 
