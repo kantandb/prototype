@@ -30,21 +30,6 @@ const (
 	maxEncodedIndexValue = 2*maxIndexValue + 1
 )
 
-type pathDialect byte
-
-const pathJSONPointer pathDialect = iota
-
-type queryPath struct {
-	dialect pathDialect
-	value   string
-}
-
-type predicate struct {
-	path  queryPath
-	op    cmpOp
-	value []byte
-}
-
 type indexDef struct {
 	name string
 	path string
@@ -450,20 +435,13 @@ func (s *store) queryDocsCtx(ctx context.Context, database, index string, encode
 	if err != nil {
 		return nil, false, err
 	}
-	def, ok := findIndex(defs, index)
-	if !ok {
+	if _, ok := findIndex(defs, index); !ok {
 		return nil, false, errIndexNotFound
 	}
-
-	pred := predicate{
-		path:  queryPath{dialect: pathJSONPointer, value: def.path},
-		op:    cmpEq,
-		value: encoded,
-	}
-	if !validIndexValue(pred.value) {
+	if !validIndexValue(encoded) {
 		return nil, false, errInvalidIndexValue
 	}
-	prefix := indexValuePrefix(database, index, pred.value)
+	prefix := indexValuePrefix(database, index, encoded)
 	snapshot := s.db.NewSnapshot()
 	defer func() {
 		if err := snapshot.Close(); err != nil {
