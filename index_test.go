@@ -333,6 +333,20 @@ func TestStoreRangeQueryCorruption(t *testing.T) {
 		t.Fatalf("Delete(document) error = %v", err)
 	}
 
+	body, err := json.Marshal(map[string]string{"value": strings.Repeat("x", maxIndexValue)})
+	if err != nil {
+		t.Fatalf("json.Marshal() error = %v", err)
+	}
+	if err := store.db.Set(docKey("db", indexTestIDA), encodeDoc(body, revision{}), pebble.Sync); err != nil {
+		t.Fatalf("Set(oversized indexed value) error = %v", err)
+	}
+	if _, _, err := store.queryRangeDocs("db", "value", cmpGT, encoded, 10, ""); !errors.Is(err, errCorruptData) {
+		t.Errorf("queryRangeDocs(oversized indexed value) error = %v, want %v", err, errCorruptData)
+	}
+	if err := store.db.Delete(docKey("db", indexTestIDA), pebble.Sync); err != nil {
+		t.Fatalf("Delete(oversized indexed value) error = %v", err)
+	}
+
 	value := encodeDoc([]byte(`{"value":1}`), revision{})
 	if err := store.db.Set(docKey("db", "bad"), value, pebble.Sync); err != nil {
 		t.Fatalf("Set(document ID) error = %v", err)

@@ -560,25 +560,28 @@ func queryDocRoot(value []byte) (map[string]any, error) {
 }
 
 func rangeMatch(value any, pred predicate) (bool, error) {
+	encoded, err := encodeIndexValue(value)
+	if errors.Is(err, errUnsupportedIdxValue) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if encoded[0] != pred.value[0] {
+		return false, nil
+	}
+
 	var comparison int
 
 	switch pred.value[0] {
 	case 0x03:
-		number, ok := value.(json.Number)
+		left, ok := new(big.Rat).SetString(string(encoded[1:]))
 		if !ok {
-			return false, nil
-		}
-		left, ok := new(big.Rat).SetString(string(number))
-		if !ok {
-			return false, errors.New("invalid document number")
+			return false, errors.New("invalid encoded number")
 		}
 		comparison = left.Cmp(pred.number)
 	case 0x04:
-		text, ok := value.(string)
-		if !ok {
-			return false, nil
-		}
-		comparison = bytes.Compare([]byte(text), pred.value[1:])
+		comparison = bytes.Compare(encoded[1:], pred.value[1:])
 	default:
 		return false, nil
 	}
