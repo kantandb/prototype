@@ -45,7 +45,8 @@ type storedDoc struct {
 }
 
 type store struct {
-	db *pebble.DB
+	db          *pebble.DB
+	wrappingKey []byte
 
 	// Database locks precede document locks so deletion excludes active writes.
 	dbStripes  [dbStripeCount]sync.RWMutex
@@ -60,16 +61,27 @@ func storeOptions() *pebble.Options {
 	}
 }
 
-func openStore(path string, _ []byte) (*store, error) {
+func openStore(path string, masterKey []byte) (*store, error) {
 	db, err := pebble.Open(path, storeOptions())
 	if err != nil {
 		return nil, fmt.Errorf("opening Pebble: %w", err)
 	}
 
-	return &store{db: db}, nil
+	wrappingKey, err := initStoreCrypto(db, masterKey)
+	if err != nil {
+		if closeErr := db.Close(); closeErr != nil {
+			err = errors.Join(err, fmt.Errorf("closing Pebble: %w", closeErr))
+		}
+
+		return nil, err
+	}
+
+	return &store{db: db, wrappingKey: wrappingKey}, nil
 }
 
 func (s *store) close() error {
+	clear(s.wrappingKey)
+
 	if err := s.db.Close(); err != nil {
 		return fmt.Errorf("closing Pebble: %w", err)
 	}
