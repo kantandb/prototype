@@ -4,7 +4,10 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"math/big"
+	"math/rand"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -108,6 +111,84 @@ func TestIndexValueEncoding(t *testing.T) {
 	}
 	if _, err := encodeIndexValue(strings.Repeat("x", maxIndexValue)); !errors.Is(err, errInvalidIndexValue) {
 		t.Errorf("encodeIndexValue(large) error = %v, want %v", err, errInvalidIndexValue)
+	}
+}
+
+func TestSortableNumberOrder(t *testing.T) {
+	t.Parallel()
+
+	literals := []string{
+		"-1e1000", "-123456789012345678901234567890.5", "-2", "-1.01", "-1", "-0.1",
+		"0", "0.0001", "0.1", "1", "1.01", "2", "123456789012345678901234567890.5", "1e1000",
+	}
+	random := rand.New(rand.NewSource(1))
+	for range 1000 {
+		coefficient := random.Int63n(1<<61) - 1<<60
+		exponent := random.Intn(81) - 40
+		literals = append(literals, strconv.FormatInt(coefficient, 10)+"e"+strconv.Itoa(exponent))
+	}
+
+	for _, leftLiteral := range literals {
+		left := json.Number(leftLiteral)
+		leftNumber, ok := new(big.Rat).SetString(leftLiteral)
+		if !ok {
+			t.Fatalf("SetString(%q) failed", leftLiteral)
+		}
+		leftEncoded, err := encodeIndexValue(left)
+		if err != nil {
+			t.Fatalf("encodeIndexValue(%q) error = %v", left, err)
+		}
+
+		for _, rightLiteral := range literals {
+			rightNumber, ok := new(big.Rat).SetString(rightLiteral)
+			if !ok {
+				t.Fatalf("SetString(%q) failed", rightLiteral)
+			}
+			rightEncoded, err := encodeIndexValue(json.Number(rightLiteral))
+			if err != nil {
+				t.Fatalf("encodeIndexValue(%q) error = %v", rightLiteral, err)
+			}
+			if got, want := bytes.Compare(leftEncoded, rightEncoded), leftNumber.Cmp(rightNumber); sign(got) != sign(want) {
+				t.Fatalf("bytes.Compare(%q, %q) = %d, numeric comparison = %d", leftLiteral, rightLiteral, got, want)
+			}
+		}
+	}
+}
+
+func TestSortableStringOrder(t *testing.T) {
+	t.Parallel()
+
+	values := []string{"", "a", "a\x00", "a\x00b", "aa", "é"}
+	for _, left := range values {
+		leftEncoded, err := encodeIndexValue(left)
+		if err != nil {
+			t.Fatalf("encodeIndexValue(%q) error = %v", left, err)
+		}
+		for _, right := range values {
+			rightEncoded, err := encodeIndexValue(right)
+			if err != nil {
+				t.Fatalf("encodeIndexValue(%q) error = %v", right, err)
+			}
+			if got, want := bytes.Compare(leftEncoded, rightEncoded), strings.Compare(left, right); sign(got) != sign(want) {
+				t.Errorf("bytes.Compare(%q, %q) = %d, string comparison = %d", left, right, got, want)
+			}
+		}
+	}
+
+	value := strings.Repeat("\x00", maxIndexValue-1)
+	if _, err := encodeIndexValue(value); err != nil {
+		t.Errorf("encodeIndexValue(maximum escaped string) error = %v", err)
+	}
+}
+
+func sign(value int) int {
+	switch {
+	case value < 0:
+		return -1
+	case value > 0:
+		return 1
+	default:
+		return 0
 	}
 }
 

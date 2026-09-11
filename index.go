@@ -23,9 +23,10 @@ var (
 )
 
 const (
-	maxIndexes    = 16
-	maxIndexPath  = 256
-	maxIndexValue = 4 << 10
+	maxIndexes           = 16
+	maxIndexPath         = 256
+	maxIndexValue        = 4 << 10
+	maxEncodedIndexValue = 2*maxIndexValue + 1
 )
 
 type pathDialect byte
@@ -174,23 +175,92 @@ func encodeIndexValue(value any) ([]byte, error) {
 		if !ok {
 			return nil, fmt.Errorf("%w: invalid number", errInvalidIndexValue)
 		}
-		encoded = append([]byte{0x03}, number.RatString()...)
+		if len(number.RatString())+1 > maxIndexValue {
+			return nil, fmt.Errorf("%w: value is too large", errInvalidIndexValue)
+		}
+		encoded = append([]byte{0x03}, encodeSortableNumber(number)...)
 	case string:
 		if !utf8.ValidString(value) {
 			return nil, fmt.Errorf("%w: invalid UTF-8", errInvalidIndexValue)
 		}
-		encoded = append([]byte{0x04}, value...)
+		if len(value)+1 > maxIndexValue {
+			return nil, fmt.Errorf("%w: value is too large", errInvalidIndexValue)
+		}
+		encoded = append([]byte{0x04}, encodeSortableString(value)...)
 	case int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64, float32, float64:
 		return encodeQueryNumber(value)
 	default:
 		return nil, fmt.Errorf("%w: %w", errInvalidIndexValue, errUnsupportedIdxValue)
 	}
 
-	if len(encoded) > maxIndexValue {
-		return nil, fmt.Errorf("%w: value is too large", errInvalidIndexValue)
+	return encoded, nil
+}
+
+func encodeSortableNumber(number *big.Rat) []byte {
+	if number.Sign() == 0 {
+		return []byte{0x01}
 	}
 
-	return encoded, nil
+	magnitude := new(big.Rat).Abs(number)
+	digits := magnitude.Num().String()
+	denominator := new(big.Int).Set(magnitude.Denom())
+	twos, fives := 0, 0
+	for denominator.Bit(0) == 0 {
+		denominator.Rsh(denominator, 1)
+		twos++
+	}
+	five := big.NewInt(5)
+	for remainder := new(big.Int); ; fives++ {
+		quotient, remainder := new(big.Int), remainder
+		quotient.QuoRem(denominator, five, remainder)
+		if remainder.Sign() != 0 {
+			break
+		}
+		denominator = quotient
+	}
+	scale := max(twos, fives)
+	coefficient := new(big.Int).Set(magnitude.Num())
+	if twos < scale {
+		coefficient.Mul(coefficient, new(big.Int).Exp(big.NewInt(2), big.NewInt(int64(scale-twos)), nil))
+	}
+	if fives < scale {
+		coefficient.Mul(coefficient, new(big.Int).Exp(five, big.NewInt(int64(scale-fives)), nil))
+	}
+	digits = coefficient.String()
+	for digits[len(digits)-1] == '0' {
+		digits = digits[:len(digits)-1]
+		scale--
+	}
+
+	exponent := int64(len(digits) - scale)
+	encoded := make([]byte, 8, 9+len(digits))
+	binary.BigEndian.PutUint64(encoded, uint64(exponent)^(uint64(1)<<63))
+	for i := range len(digits) {
+		encoded = append(encoded, digits[i]-'0'+1)
+	}
+	encoded = append(encoded, 0x00)
+
+	if number.Sign() > 0 {
+		return append([]byte{0x02}, encoded...)
+	}
+	for i := range encoded {
+		encoded[i] = ^encoded[i]
+	}
+
+	return append([]byte{0x00}, encoded...)
+}
+
+func encodeSortableString(value string) []byte {
+	encoded := make([]byte, 0, len(value)+2)
+	for i := range len(value) {
+		if value[i] == 0x00 {
+			encoded = append(encoded, 0x00, 0xff)
+		} else {
+			encoded = append(encoded, value[i])
+		}
+	}
+
+	return append(encoded, 0x00, 0x00)
 }
 
 func encodeQueryNumber(value any) ([]byte, error) {
@@ -531,12 +601,51 @@ func prepareRangePred(pred *predicate) bool {
 		return false
 	}
 	if pred.value[0] == 0x03 {
-		pred.number, _ = new(big.Rat).SetString(string(pred.value[1:]))
+		pred.number = decodeSortableNumber(pred.value[1:])
 
-		return true
+		return pred.number != nil
 	}
 
 	return pred.value[0] == 0x04
+}
+
+func decodeSortableNumber(value []byte) *big.Rat {
+	if !validSortableNumber(value) {
+		return nil
+	}
+	if value[0] == 0x01 {
+		return new(big.Rat)
+	}
+
+	negative := value[0] == 0x00
+	magnitude := bytes.Clone(value[1:])
+	if negative {
+		for i := range magnitude {
+			magnitude[i] = ^magnitude[i]
+		}
+	}
+	exponent := int64(binary.BigEndian.Uint64(magnitude[:8]) ^ (uint64(1) << 63))
+	digits := make([]byte, len(magnitude)-9)
+	for i, digit := range magnitude[8 : len(magnitude)-1] {
+		digits[i] = digit - 1 + '0'
+	}
+	coefficient, ok := new(big.Int).SetString(string(digits), 10)
+	if !ok {
+		return nil
+	}
+	if negative {
+		coefficient.Neg(coefficient)
+	}
+
+	scale := int64(len(digits)) - exponent
+	if scale >= 0 {
+		denominator := new(big.Int).Exp(big.NewInt(10), big.NewInt(scale), nil)
+
+		return new(big.Rat).SetFrac(coefficient, denominator)
+	}
+	coefficient.Mul(coefficient, new(big.Int).Exp(big.NewInt(10), big.NewInt(-scale), nil))
+
+	return new(big.Rat).SetInt(coefficient)
 }
 
 func queryDocRoot(value []byte) (map[string]any, error) {
@@ -575,8 +684,8 @@ func rangeMatch(value any, pred predicate) (bool, error) {
 
 	switch pred.value[0] {
 	case 0x03:
-		left, ok := new(big.Rat).SetString(string(encoded[1:]))
-		if !ok {
+		left := decodeSortableNumber(encoded[1:])
+		if left == nil {
 			return false, errors.New("invalid encoded number")
 		}
 		comparison = left.Cmp(pred.number)
