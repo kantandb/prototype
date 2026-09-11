@@ -214,6 +214,35 @@ func TestIndexKeyParts(t *testing.T) {
 	}
 }
 
+func TestSortableIndexKeyOrder(t *testing.T) {
+	t.Parallel()
+
+	values := []any{json.Number("-2"), json.Number("1"), json.Number("1.5"), json.Number("10")}
+	var previous []byte
+	for _, value := range values {
+		encoded, err := encodeIndexValue(value)
+		if err != nil {
+			t.Fatalf("encodeIndexValue(%v) error = %v", value, err)
+		}
+		key := indexKey("db", "value", encoded, indexTestIDA)
+		if previous != nil && bytes.Compare(previous, key) >= 0 {
+			t.Errorf("index key for %v does not follow previous value", value)
+		}
+		if !bytes.HasPrefix(key, indexValuePrefix("db", "value", encoded)) {
+			t.Errorf("index key for %v lacks complete value prefix", value)
+		}
+		previous = key
+	}
+
+	encoded, err := encodeIndexValue("same")
+	if err != nil {
+		t.Fatalf("encodeIndexValue() error = %v", err)
+	}
+	if bytes.Compare(indexKey("db", "value", encoded, indexTestIDA), indexKey("db", "value", encoded, indexTestIDB)) >= 0 {
+		t.Error("document IDs do not break equal-value ties")
+	}
+}
+
 func TestStoreIndexesDocuments(t *testing.T) {
 	t.Parallel()
 

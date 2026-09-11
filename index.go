@@ -309,10 +309,16 @@ func indexDataPrefix(database string) []byte {
 	return appendPart(append([]byte(nil), idxDataPrefix...), []byte(database))
 }
 
+func indexTypePrefix(database, index string, valueType byte) []byte {
+	key := appendPart(indexDataPrefix(database), []byte(index))
+
+	return append(key, valueType)
+}
+
 func indexValuePrefix(database, index string, value []byte) []byte {
 	key := appendPart(indexDataPrefix(database), []byte(index))
 
-	return appendPart(key, value)
+	return append(key, value...)
 }
 
 func indexKey(database, index string, value []byte, id string) []byte {
