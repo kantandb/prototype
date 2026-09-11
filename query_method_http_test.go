@@ -113,6 +113,51 @@ func TestPathQueryNumericTokenHTTP(t *testing.T) {
 	checkResponse(t, res, http.StatusOK, `{"documents":["`+objectID+`"],"cursor":""}`)
 }
 
+func TestPathQueryLongCursorHTTP(t *testing.T) {
+	t.Parallel()
+
+	server := newTestServer(t, defaultMaxBodyBytes)
+	res := sendRequest(t, server, http.MethodPost, "/", `{"name":"deep"}`, "application/json")
+	checkResponse(t, res, http.StatusCreated, `{"name":"deep"}`)
+
+	names := make([]string, maxPathSegments)
+	var value any = 1
+	for i := len(names) - 1; i >= 0; i-- {
+		names[i] = "aaaaa"
+		value = map[string]any{names[i]: value}
+	}
+	doc, err := json.Marshal(value)
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+	firstID := createQueryDoc(t, server, "/deep/", string(doc))
+	secondID := createQueryDoc(t, server, "/deep/", string(doc))
+
+	path := "$." + strings.Join(names, ".")
+	body, err := json.Marshal(map[string]any{"path": path, "value": 1, "limit": 1})
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+	res = sendRequest(t, server, queryMethod, "/deep", string(body), "application/json")
+	var page docList
+	if err := json.NewDecoder(res.Body).Decode(&page); err != nil {
+		t.Fatalf("Decode() error = %v", err)
+	}
+	if err := res.Body.Close(); err != nil {
+		t.Errorf("Response.Body.Close() error = %v", err)
+	}
+	if len(page.Documents) != 1 || page.Documents[0] != firstID || page.Cursor == "" {
+		t.Fatalf("first page = %+v, want %s and cursor", page, firstID)
+	}
+
+	body, err = json.Marshal(map[string]any{"path": path, "value": 1, "limit": 1, "cursor": page.Cursor})
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+	res = sendRequest(t, server, queryMethod, "/deep", string(body), "application/json")
+	checkResponse(t, res, http.StatusOK, `{"documents":["`+secondID+`"],"cursor":""}`)
+}
+
 func TestPathQueryLimitsHTTP(t *testing.T) {
 	t.Parallel()
 

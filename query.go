@@ -423,7 +423,7 @@ func (s *store) executePathQuery(ctx context.Context, database string, plan path
 	}
 	cursor := pathCursor{
 		method: queryMethod, dialect: dialectJSONPath, order: order,
-		database: database, path: plan.text, index: plan.index,
+		database: database, pathHash: pathHash(plan.text), index: plan.index,
 		op: query.op, value: encoded, lastValue: lastValue, id: afterID,
 	}
 	token, err := encodePathCursor(box, cursor)

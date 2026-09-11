@@ -4,14 +4,14 @@ import (
 	"bytes"
 	"crypto/cipher"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
 	"fmt"
-	"unicode/utf8"
 )
 
 const (
-	pathCursorVersion          = 1
-	maxPathCursorSize          = 1 + 10 + len(queryMethod) + 1 + 1 + 10 + 63 + 10 + maxQueryPath + 10 + 63 + 1 + 10 + maxEncodedIndexValue + 10 + maxEncodedIndexValue + 10 + 36
+	pathCursorVersion          = 2
+	maxPathCursorSize          = 1 + 10 + len(queryMethod) + 1 + 1 + 10 + 63 + 10 + sha256.Size + 10 + 63 + 1 + 10 + maxEncodedIndexValue + 10 + maxEncodedIndexValue + 10 + 36
 	maxEncryptedPathCursorSize = maxPathCursorSize + 12 + 16
 )
 
@@ -31,7 +31,7 @@ type pathCursor struct {
 	dialect   pathDialect
 	order     pathOrder
 	database  string
-	path      string
+	pathHash  [sha256.Size]byte
 	index     string
 	op        cmpOp
 	value     []byte
@@ -48,7 +48,7 @@ func encodePathCursor(box cipher.AEAD, cursor pathCursor) (string, error) {
 	data = appendPart(data, []byte(cursor.method))
 	data = append(data, byte(cursor.dialect), byte(cursor.order))
 	data = appendPart(data, []byte(cursor.database))
-	data = appendPart(data, []byte(cursor.path))
+	data = appendPart(data, cursor.pathHash[:])
 	data = appendPart(data, []byte(cursor.index))
 	data = append(data, byte(cursor.op))
 	data = appendPart(data, cursor.value)
@@ -92,8 +92,8 @@ func decodePathCursor(box cipher.AEAD, token string) (pathCursor, error) {
 	if !ok {
 		return pathCursor{}, errInvalidQueryCursor
 	}
-	path, rest, ok := readPart(rest)
-	if !ok {
+	pathHash, rest, ok := readPart(rest)
+	if !ok || len(pathHash) != sha256.Size {
 		return pathCursor{}, errInvalidQueryCursor
 	}
 	index, rest, ok := readPart(rest)
@@ -119,13 +119,13 @@ func decodePathCursor(box cipher.AEAD, token string) (pathCursor, error) {
 		dialect:   dialect,
 		order:     order,
 		database:  string(database),
-		path:      string(path),
 		index:     string(index),
 		op:        op,
 		value:     bytes.Clone(value),
 		lastValue: bytes.Clone(lastValue),
 		id:        string(id),
 	}
+	copy(cursor.pathHash[:], pathHash)
 	if err := validatePathCursor(cursor); err != nil {
 		return pathCursor{}, errInvalidQueryCursor
 	}
@@ -137,7 +137,7 @@ func validatePathCursor(cursor pathCursor) error {
 	if cursor.method != queryMethod || cursor.dialect != dialectJSONPath || cursor.order != orderDocument && cursor.order != orderIndex {
 		return errInvalidQueryCursor
 	}
-	if validateName(cursor.database) != nil || len(cursor.path) == 0 || len(cursor.path) > maxQueryPath || !utf8.ValidString(cursor.path) {
+	if validateName(cursor.database) != nil {
 		return errInvalidQueryCursor
 	}
 	if !cursor.op.valid() || !validIndexValue(cursor.value) || validateID(cursor.id) != nil {
@@ -163,12 +163,16 @@ func validatePathCursor(cursor pathCursor) error {
 	return nil
 }
 
+func pathHash(path string) [sha256.Size]byte {
+	return sha256.Sum256([]byte(path))
+}
+
 func matchPathCursor(cursor pathCursor, database string, plan pathPlan, query pathQuery, encoded []byte) error {
 	order := orderDocument
 	if plan.index != "" {
 		order = orderIndex
 	}
-	if cursor.method != queryMethod || cursor.dialect != dialectJSONPath || cursor.order != order || cursor.database != database || cursor.path != plan.text || cursor.index != plan.index || cursor.op != query.op || !bytes.Equal(cursor.value, encoded) {
+	if cursor.method != queryMethod || cursor.dialect != dialectJSONPath || cursor.order != order || cursor.database != database || cursor.pathHash != pathHash(plan.text) || cursor.index != plan.index || cursor.op != query.op || !bytes.Equal(cursor.value, encoded) {
 		return errInvalidQueryCursor
 	}
 
