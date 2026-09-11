@@ -178,6 +178,10 @@ func encodeIndexValue(value any) ([]byte, error) {
 		return nil, fmt.Errorf("%w: %w", errInvalidIndexValue, errUnsupportedIdxValue)
 	}
 
+	if !validIndexValue(encoded) {
+		return nil, fmt.Errorf("%w: value is too large", errInvalidIndexValue)
+	}
+
 	return encoded, nil
 }
 

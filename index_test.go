@@ -113,6 +113,13 @@ func TestIndexValueEncoding(t *testing.T) {
 	if _, err := encodeIndexValue(strings.Repeat("x", maxIndexValue)); !errors.Is(err, errInvalidIndexValue) {
 		t.Errorf("encodeIndexValue(large) error = %v, want %v", err, errInvalidIndexValue)
 	}
+
+	const scale = 6000
+	coefficient := new(big.Int).Exp(big.NewInt(5), big.NewInt(scale), nil).String()
+	finiteDecimal := "0." + strings.Repeat("0", scale-len(coefficient)) + coefficient
+	if _, err := encodeIndexValue(json.Number(finiteDecimal)); !errors.Is(err, errInvalidIndexValue) {
+		t.Errorf("encodeIndexValue(large finite decimal) error = %v, want %v", err, errInvalidIndexValue)
+	}
 }
 
 func TestSortableNumberOrder(t *testing.T) {
