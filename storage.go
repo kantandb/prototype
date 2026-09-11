@@ -28,10 +28,7 @@ var (
 	idxDataPrefix = []byte{0x04}
 )
 
-const (
-	recordVersion byte = 1
-	cursorKeySize int  = 32
-)
+const cursorKeySize = keySize
 
 const (
 	dbStripeCount  = 64
@@ -563,12 +560,12 @@ func (s *store) readDoc(key []byte) (doc storedDoc, readErr error) {
 }
 
 func validDBRecord(value []byte) bool {
-	return len(value) == 1+cursorKeySize && value[0] == recordVersion
+	return len(value) == 1+cursorKeySize && value[0] == dbRecordVersion
 }
 
 func makeDBRecord() ([]byte, error) {
 	value := make([]byte, 1+cursorKeySize)
-	value[0] = recordVersion
+	value[0] = dbRecordVersion
 	if _, err := rand.Read(value[1:]); err != nil {
 		return nil, fmt.Errorf("generating cursor key: %w", err)
 	}
@@ -612,7 +609,7 @@ func makeRevision(previous *revision) (revision, error) {
 // A versioned binary header keeps metadata outside user JSON.
 func encodeDoc(json []byte, rev revision) []byte {
 	value := make([]byte, 1+len(rev)+len(json))
-	value[0] = recordVersion
+	value[0] = docRecordVersion
 	copy(value[1:], rev[:])
 	copy(value[1+len(rev):], json)
 
@@ -620,7 +617,7 @@ func encodeDoc(json []byte, rev revision) []byte {
 }
 
 func decodeDoc(value []byte) (storedDoc, error) {
-	if len(value) < 1+len(revision{}) || value[0] != recordVersion {
+	if len(value) < 1+len(revision{}) || value[0] != docRecordVersion {
 		return storedDoc{}, errors.New("invalid document record")
 	}
 

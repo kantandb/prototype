@@ -314,11 +314,11 @@ func indexKey(database, index string, value []byte, id string) []byte {
 }
 
 func encodeIndexDef(def indexDef) []byte {
-	return append([]byte{recordVersion}, def.path...)
+	return append([]byte{indexDefVersion}, def.path...)
 }
 
 func decodeIndexDef(name string, value []byte) (indexDef, error) {
-	if len(value) < 2 || value[0] != recordVersion {
+	if len(value) < 2 || value[0] != indexDefVersion {
 		return indexDef{}, errors.New("invalid index definition")
 	}
 

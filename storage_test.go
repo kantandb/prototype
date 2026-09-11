@@ -513,8 +513,8 @@ func TestDecodeDocRejectsCorruption(t *testing.T) {
 
 	tests := [][]byte{
 		nil,
-		{recordVersion},
-		append([]byte{recordVersion + 1}, make([]byte, 16)...),
+		{docRecordVersion},
+		append([]byte{docRecordVersion + 1}, make([]byte, 16)...),
 	}
 	for _, value := range tests {
 		if _, err := decodeDoc(value); err == nil {
