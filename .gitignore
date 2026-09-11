@@ -37,3 +37,4 @@ go.work.sum
 # notes
 *.md
 !README.md
+!/docs/**
