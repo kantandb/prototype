@@ -65,7 +65,7 @@ strings. Types are not coerced; missing paths, objects, arrays, and values of a
 different type do not match. Number comparisons are exact. Strings use binary
 UTF-8 order.
 
-Equality queries read the persisted index. Ordering queries scan documents in
-ID order until they find one page plus one extra match, so sparse matches can
-require a full scan. Reuse the returned cursor with the same database, index,
-operator, and value.
+Index queries read at most one page plus one extra valid index entry. Range
+results use indexed-value order, with document ID as the tie-breaker. Equality
+results remain in document ID order. Reuse the returned cursor with the same
+database, index, operator, and value.
