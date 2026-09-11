@@ -7,6 +7,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
@@ -21,7 +22,11 @@ var (
 	storeVerifier      = sha256.Sum256([]byte("kantandb/store/verifier/v1"))
 )
 
-const wrappingInfo = "kantandb/wrapping/v1"
+const (
+	wrappingInfo = "kantandb/wrapping/v1"
+	cursorInfo   = "kantandb/cursor/v1"
+	documentInfo = "kantandb/document/v1"
+)
 
 func initStoreCrypto(db *pebble.DB, masterKey []byte) ([]byte, error) {
 	if len(masterKey) != keySize {
@@ -146,6 +151,33 @@ func deriveWrapKey(masterKey, salt []byte) ([]byte, error) {
 	key := make([]byte, keySize)
 	if _, err := io.ReadFull(reader, key); err != nil {
 		return nil, fmt.Errorf("deriving wrapping key: %w", err)
+	}
+
+	return key, nil
+}
+
+func deriveCursorKey(databaseKey []byte) ([]byte, error) {
+	return deriveKey(databaseKey, []byte(cursorInfo))
+}
+
+func deriveDocumentKey(databaseKey []byte, id string) ([]byte, error) {
+	info := make([]byte, len(documentInfo)+8+len(id))
+	copy(info, documentInfo)
+	binary.BigEndian.PutUint64(info[len(documentInfo):], uint64(len(id)))
+	copy(info[len(documentInfo)+8:], id)
+
+	return deriveKey(databaseKey, info)
+}
+
+func deriveKey(input, info []byte) ([]byte, error) {
+	if len(input) != keySize {
+		return nil, errors.New("invalid key length")
+	}
+
+	reader := hkdf.New(sha256.New, input, nil, info)
+	key := make([]byte, keySize)
+	if _, err := io.ReadFull(reader, key); err != nil {
+		return nil, fmt.Errorf("deriving purpose key: %w", err)
 	}
 
 	return key, nil
