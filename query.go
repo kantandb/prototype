@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 
@@ -260,14 +261,15 @@ func jsonPathPointer(path *jsonpath.Path) (string, bool) {
 
 		switch selector := selectors[0].(type) {
 		case spec.Name:
-			name := strings.ReplaceAll(string(selector), "~", "~0")
+			name := string(selector)
+			if index, err := strconv.Atoi(name); err == nil && index >= 0 && strconv.Itoa(index) == name {
+				return "", false
+			}
+			name = strings.ReplaceAll(name, "~", "~0")
 			name = strings.ReplaceAll(name, "/", "~1")
 			pointer += "/" + name
 		case spec.Index:
-			if selector < 0 {
-				return "", false
-			}
-			pointer += fmt.Sprintf("/%d", selector)
+			return "", false
 		default:
 			return "", false
 		}

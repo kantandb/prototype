@@ -96,6 +96,23 @@ func TestPathQueryUsesIndexHTTP(t *testing.T) {
 	checkResponse(t, res, http.StatusOK, `{"documents":["`+twenty+`"],"cursor":""}`)
 }
 
+func TestPathQueryNumericTokenHTTP(t *testing.T) {
+	t.Parallel()
+
+	server := newTestServer(t, defaultMaxBodyBytes)
+	res := sendRequest(t, server, http.MethodPost, "/", `{"name":"stock","indexes":[{"name":"sku","path":"/items/0/sku"}]}`, "application/json")
+	checkResponse(t, res, http.StatusCreated, `{"name":"stock","indexes":[{"name":"sku","path":"/items/0/sku"}]}`)
+
+	arrayID := createQueryDoc(t, server, "/stock/", `{"items":[{"sku":"match"}]}`)
+	objectID := createQueryDoc(t, server, "/stock/", `{"items":{"0":{"sku":"match"}}}`)
+
+	res = sendRequest(t, server, queryMethod, "/stock", `{"path":"$.items[0].sku","value":"match"}`, "application/json")
+	checkResponse(t, res, http.StatusOK, `{"documents":["`+arrayID+`"],"cursor":""}`)
+
+	res = sendRequest(t, server, queryMethod, "/stock", `{"path":"$.items['0'].sku","value":"match"}`, "application/json")
+	checkResponse(t, res, http.StatusOK, `{"documents":["`+objectID+`"],"cursor":""}`)
+}
+
 func TestPathQueryLimitsHTTP(t *testing.T) {
 	t.Parallel()
 

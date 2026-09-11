@@ -134,7 +134,7 @@ same request with cursor
 
 Unfiltered lists and equality queries are ordered by document ID. Range queries are ordered by indexed value, then document ID when values are equal.
 
-A simple JSONPath is translated to JSON Pointer. If it matches a declared index, QUERY uses index order. Other JSONPaths scan in document ID order. A scan page examines at most 10,000 documents, so it can return an empty page with a continuation cursor. Each request runs for at most five seconds.
+A simple JSONPath is translated to JSON Pointer. If it matches a declared index, QUERY uses index order. Paths containing a numeric token scan because JSON Pointer cannot distinguish an array index from an object member name. Other JSONPaths also scan in document ID order. A scan page examines at most 10,000 documents, so it can return an empty page with a continuation cursor. Each request runs for at most five seconds.
 
 If more results exist, `cursor` is non-empty. Send it back with the same query. The final page returns an empty cursor. A cursor does not identify a fixed snapshot across requests, so writes between pages can change later results.
 

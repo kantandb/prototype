@@ -84,7 +84,8 @@ database, index, operator, and value.
 
 `QUERY /{database}` accepts RFC 9535 JSONPath in a JSON body. A document matches
 when any selected scalar satisfies the comparison. A simple path that matches a
-declared index uses that index; other paths scan documents in ID order. Each
+declared index uses that index unless it contains a numeric token; other paths
+scan documents in ID order. Each
 scan page examines at most 10,000 documents and runs for at most five seconds.
 The request body is limited to 64 KiB and the path to 256 bytes. Paths allow one
 descendant and one selector per segment; scan evaluation allows 1,000,000 JSON

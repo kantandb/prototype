@@ -18,8 +18,10 @@ func TestJSONPathPointer(t *testing.T) {
 		ok      bool
 	}{
 		{path: `$.profile.age`, pointer: "/profile/age", ok: true},
-		{path: `$['a/b']['~x'][0]`, pointer: "/a~1b/~0x/0", ok: true},
+		{path: `$['a/b']['~x']`, pointer: "/a~1b/~0x", ok: true},
 		{path: `$`, ok: false},
+		{path: `$.items[0]`, ok: false},
+		{path: `$.items['0']`, ok: false},
 		{path: `$.items[-1]`, ok: false},
 		{path: `$.items[*]`, ok: false},
 		{path: `$..name`, ok: false},
@@ -91,6 +93,20 @@ func TestPlanPathQuery(t *testing.T) {
 	}
 	if plan.index != "" {
 		t.Errorf("descendant index = %q, want scan", plan.index)
+	}
+
+	store = testStore(t)
+	if err := store.createDB("items", indexDef{name: "sku", path: "/items/0/sku"}); err != nil {
+		t.Fatalf("createDB() error = %v", err)
+	}
+	for _, path := range []string{`$.items[0].sku`, `$.items['0'].sku`} {
+		plan, err := store.planPathQuery("items", path)
+		if err != nil {
+			t.Fatalf("planPathQuery(%q) error = %v", path, err)
+		}
+		if plan.index != "" {
+			t.Errorf("planPathQuery(%q) index = %q, want scan", path, plan.index)
+		}
 	}
 }
 
