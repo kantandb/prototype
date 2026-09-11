@@ -509,6 +509,7 @@ func TestStoreMaintainsIndexes(t *testing.T) {
 		t.Fatalf("replaceDoc(stale) error = %v, want %v", err, errPreconditionFailed)
 	}
 	assertQuery(t, store, "db", "name", "first", []string{indexTestIDA})
+	assertIndexEntry(t, store, "db", "name", "first", indexTestIDA, true)
 
 	newRev, err := store.replaceDoc("db", indexTestIDA, []byte(`{"name":"second"}`), matchCond{set: true, revision: rev})
 	if err != nil {
@@ -516,6 +517,8 @@ func TestStoreMaintainsIndexes(t *testing.T) {
 	}
 	assertQuery(t, store, "db", "name", "first", nil)
 	assertQuery(t, store, "db", "name", "second", []string{indexTestIDA})
+	assertIndexEntry(t, store, "db", "name", "first", indexTestIDA, false)
+	assertIndexEntry(t, store, "db", "name", "second", indexTestIDA, true)
 
 	doc, err := store.patchDoc("db", indexTestIDA, matchCond{set: true, revision: newRev}, func([]byte) ([]byte, error) {
 		return []byte(`{"name":"third"}`), nil
@@ -525,11 +528,14 @@ func TestStoreMaintainsIndexes(t *testing.T) {
 	}
 	assertQuery(t, store, "db", "name", "second", nil)
 	assertQuery(t, store, "db", "name", "third", []string{indexTestIDA})
+	assertIndexEntry(t, store, "db", "name", "second", indexTestIDA, false)
+	assertIndexEntry(t, store, "db", "name", "third", indexTestIDA, true)
 
 	if err := store.deleteDoc("db", indexTestIDA, matchCond{set: true, revision: doc.revision}); err != nil {
 		t.Fatalf("deleteDoc() error = %v", err)
 	}
 	assertQuery(t, store, "db", "name", "third", nil)
+	assertIndexEntry(t, store, "db", "name", "third", indexTestIDA, false)
 }
 
 func TestStorePersistsIndexes(t *testing.T) {
@@ -647,6 +653,22 @@ func TestStoreRejectsCorruptIndex(t *testing.T) {
 	}
 	if _, _, err := store.queryDocs("db", "name", value, 10, ""); !errors.Is(err, errCorruptData) {
 		t.Errorf("queryDocs(missing document) error = %v, want %v", err, errCorruptData)
+	}
+}
+
+func assertIndexEntry(t *testing.T, store *store, database, index string, value any, id string, want bool) {
+	t.Helper()
+
+	encoded, err := encodeIndexValue(value)
+	if err != nil {
+		t.Fatalf("encodeIndexValue() error = %v", err)
+	}
+	got, err := store.has(indexKey(database, index, encoded, id))
+	if err != nil {
+		t.Fatalf("has(index entry) error = %v", err)
+	}
+	if got != want {
+		t.Errorf("index entry exists = %t, want %t", got, want)
 	}
 }
 
