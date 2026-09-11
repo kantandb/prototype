@@ -421,12 +421,15 @@ func TestStoreRangeQueries(t *testing.T) {
 	if err := store.deleteDoc("db", indexTestIDB, matchCond{set: true, revision: doc.revision}); err != nil {
 		t.Fatalf("deleteDoc() error = %v", err)
 	}
+	if _, err := store.createDoc("db", indexTestIDB, []byte(`{"value":2}`)); err != nil {
+		t.Fatalf("createDoc(reused cursor ID) error = %v", err)
+	}
 	page, err = store.queryRangePage(context.Background(), "db", "value", cmpGE, one, 100, page.lastValue, indexTestIDB)
 	if err != nil {
-		t.Fatalf("queryRangePage(deleted cursor entry) error = %v", err)
+		t.Fatalf("queryRangePage(mutated cursor entry) error = %v", err)
 	}
-	if page.more || !slices.Equal(page.ids, []string{indexTestIDC}) {
-		t.Errorf("queryRangePage(deleted cursor entry) = %+v, want [%s]", page, indexTestIDC)
+	if page.more || !slices.Equal(page.ids, []string{indexTestIDB, indexTestIDC}) {
+		t.Errorf("queryRangePage(mutated cursor entry) = %+v, want [%s %s]", page, indexTestIDB, indexTestIDC)
 	}
 }
 
@@ -488,6 +491,40 @@ func TestStoreQueryCancellation(t *testing.T) {
 
 	if _, _, err := store.queryRangeDocsCtx(ctx, "db", "value", cmpGT, encoded, 10, ""); !errors.Is(err, context.Canceled) {
 		t.Errorf("queryRangeDocsCtx() error = %v, want %v", err, context.Canceled)
+	}
+	exact, err := encodeIndexValue(json.Number("1"))
+	if err != nil {
+		t.Fatalf("encodeIndexValue(exact) error = %v", err)
+	}
+	if _, _, err := store.queryDocsCtx(ctx, "db", "value", exact, 10, ""); !errors.Is(err, context.Canceled) {
+		t.Errorf("queryDocsCtx() error = %v, want %v", err, context.Canceled)
+	}
+}
+
+func TestStoreIgnoresOldIndexLayout(t *testing.T) {
+	t.Parallel()
+
+	store := testStore(t)
+	if err := store.createDB("db", indexDef{name: "value", path: "/value"}); err != nil {
+		t.Fatalf("createDB() error = %v", err)
+	}
+	encoded, err := encodeIndexValue(json.Number("1"))
+	if err != nil {
+		t.Fatalf("encodeIndexValue() error = %v", err)
+	}
+	oldKey := appendPart(indexDataPrefix("db"), []byte("value"))
+	oldKey = appendPart(oldKey, encoded)
+	oldKey = append(oldKey, indexTestIDA...)
+	if err := store.db.Set(oldKey, nil, pebble.Sync); err != nil {
+		t.Fatalf("Set(old index entry) error = %v", err)
+	}
+
+	ids, more, err := store.queryDocs("db", "value", encoded, 10, "")
+	if err != nil {
+		t.Fatalf("queryDocs() error = %v", err)
+	}
+	if more || len(ids) != 0 {
+		t.Errorf("queryDocs() = %v, %t, want empty, false", ids, more)
 	}
 }
 

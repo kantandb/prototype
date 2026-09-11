@@ -300,6 +300,31 @@ func TestRangeSemanticsHTTP(t *testing.T) {
 	}
 }
 
+func TestRangeValueOrderHTTP(t *testing.T) {
+	t.Parallel()
+
+	server := newTestServer(t, defaultMaxBodyBytes)
+	res := sendRequest(t, server, http.MethodPost, "/", `{"name":"values","indexes":[{"name":"value","path":"/value"}]}`, "application/json")
+	checkResponse(t, res, http.StatusCreated, `{"name":"values","indexes":[{"name":"value","path":"/value"}]}`)
+
+	twenty := createQueryDoc(t, server, "/values/", `{"value":20}`)
+	tenA := createQueryDoc(t, server, "/values/", `{"value":10}`)
+	tenB := createQueryDoc(t, server, "/values/", `{"value":10.0}`)
+	want := []string{tenA, tenB, twenty}
+
+	res = sendRequest(t, server, http.MethodGet, "/values?index=value&op=ge&value=10", "", "")
+	var page docList
+	if err := json.NewDecoder(res.Body).Decode(&page); err != nil {
+		t.Fatalf("Decode() error = %v", err)
+	}
+	if err := res.Body.Close(); err != nil {
+		t.Errorf("Response.Body.Close() error = %v", err)
+	}
+	if !slices.Equal(page.Documents, want) {
+		t.Errorf("documents = %v, want value and ID order %v", page.Documents, want)
+	}
+}
+
 func TestParseCmpOp(t *testing.T) {
 	t.Parallel()
 
