@@ -55,6 +55,34 @@ func TestPathQueryHTTP(t *testing.T) {
 	}
 }
 
+func TestPathQueryUsesIndexHTTP(t *testing.T) {
+	t.Parallel()
+
+	server := newTestServer(t, defaultMaxBodyBytes)
+	res := sendRequest(t, server, http.MethodPost, "/", `{"name":"scores","indexes":[{"name":"score","path":"/score"}]}`, "application/json")
+	checkResponse(t, res, http.StatusCreated, `{"name":"scores","indexes":[{"name":"score","path":"/score"}]}`)
+
+	twenty := createQueryDoc(t, server, "/scores/", `{"score":20}`)
+	ten := createQueryDoc(t, server, "/scores/", `{"score":10}`)
+
+	body := `{"path":"$.score","op":"ge","value":10,"limit":1}`
+	res = sendRequest(t, server, queryMethod, "/scores", body, "application/json")
+	var first docList
+	if err := json.NewDecoder(res.Body).Decode(&first); err != nil {
+		t.Fatalf("Decode() error = %v", err)
+	}
+	if err := res.Body.Close(); err != nil {
+		t.Errorf("Response.Body.Close() error = %v", err)
+	}
+	if len(first.Documents) != 1 || first.Documents[0] != ten || first.Cursor == "" || first.Cursor == ten {
+		t.Fatalf("first page = %+v, want indexed value order and opaque cursor", first)
+	}
+
+	body = `{"path":"$['score']","op":"ge","value":10,"limit":1,"cursor":"` + first.Cursor + `"}`
+	res = sendRequest(t, server, queryMethod, "/scores", body, "application/json")
+	checkResponse(t, res, http.StatusOK, `{"documents":["`+twenty+`"],"cursor":""}`)
+}
+
 func TestPathQueryContractHTTP(t *testing.T) {
 	t.Parallel()
 

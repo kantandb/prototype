@@ -7,12 +7,16 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 
 	"github.com/cockroachdb/pebble"
 	"github.com/theory/jsonpath"
+	"github.com/theory/jsonpath/spec"
 )
 
 const queryMethod = "QUERY"
+
+var errInvalidPath = errors.New("invalid JSONPath")
 
 type pathQuery struct {
 	path   string
@@ -20,6 +24,12 @@ type pathQuery struct {
 	cursor string
 	op     cmpOp
 	limit  int
+}
+
+type pathPlan struct {
+	path  *jsonpath.Path
+	text  string
+	index string
 }
 
 func decodePathQuery(body []byte) (pathQuery, error) {
@@ -108,6 +118,70 @@ func jsonEnd(decoder *json.Decoder) error {
 	}
 
 	return nil
+}
+
+func (s *store) planPathQuery(database, raw string) (pathPlan, error) {
+	path, err := jsonpath.Parse(raw)
+	if err != nil {
+		return pathPlan{}, fmt.Errorf("%w: %v", errInvalidPath, err)
+	}
+	plan := pathPlan{path: path, text: path.String()}
+
+	dbMu := s.dbLock(database)
+	dbMu.RLock()
+	defer dbMu.RUnlock()
+
+	exists, err := s.hasDB(database)
+	if err != nil {
+		return pathPlan{}, fmt.Errorf("checking database: %w", err)
+	}
+	if !exists {
+		return pathPlan{}, errDBNotFound
+	}
+	pointer, ok := jsonPathPointer(path)
+	if !ok {
+		return plan, nil
+	}
+
+	defs, err := s.indexes(database)
+	if err != nil {
+		return pathPlan{}, err
+	}
+	for _, def := range defs {
+		if def.path == pointer {
+			plan.index = def.name
+
+			break
+		}
+	}
+
+	return plan, nil
+}
+
+func jsonPathPointer(path *jsonpath.Path) (string, bool) {
+	var pointer string
+	for _, segment := range path.Query().Segments() {
+		selectors := segment.Selectors()
+		if segment.IsDescendant() || len(selectors) != 1 {
+			return "", false
+		}
+
+		switch selector := selectors[0].(type) {
+		case spec.Name:
+			name := strings.ReplaceAll(string(selector), "~", "~0")
+			name = strings.ReplaceAll(name, "/", "~1")
+			pointer += "/" + name
+		case spec.Index:
+			if selector < 0 {
+				return "", false
+			}
+			pointer += fmt.Sprintf("/%d", selector)
+		default:
+			return "", false
+		}
+	}
+
+	return pointer, pointer != ""
 }
 
 func (s *store) queryPathDocs(ctx context.Context, database string, path *jsonpath.Path, op cmpOp, value any, limit int, afterID string) (ids []string, more bool, queryErr error) {

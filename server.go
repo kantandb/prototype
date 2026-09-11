@@ -17,7 +17,6 @@ import (
 	"sync/atomic"
 
 	"github.com/gin-gonic/gin"
-	"github.com/theory/jsonpath"
 )
 
 type api struct {
@@ -374,19 +373,56 @@ func (a *api) queryDocs(c *gin.Context) {
 
 		return
 	}
-	if query.cursor != "" && validateID(query.cursor) != nil {
-		writeError(c, http.StatusBadRequest, "invalid_cursor", "Cursor is invalid")
-
-		return
-	}
-
-	path, err := jsonpath.Parse(query.path)
-	if err != nil {
+	plan, err := a.store.planPathQuery(database, query.path)
+	if errors.Is(err, errInvalidPath) {
 		writeError(c, http.StatusBadRequest, "invalid_query", "Path is invalid")
 
 		return
 	}
-	ids, more, err := a.store.queryPathDocs(c.Request.Context(), database, path, query.op, query.value, query.limit, query.cursor)
+
+	var ids []string
+	var more bool
+	var cursor string
+	if err == nil && plan.index != "" {
+		key, keyErr := a.store.cursorKey(database)
+		if keyErr != nil {
+			err = keyErr
+		} else {
+			var box cipher.AEAD
+			box, err = newQueryCipher(key)
+			if err == nil {
+				indexed := docQuery{value: query.value, cursor: query.cursor, index: plan.index, op: query.op, limit: query.limit, indexed: true}
+				var encoded, lastValue []byte
+				var afterID string
+				encoded, lastValue, afterID, err = queryStart(box, database, indexed)
+				if err == nil && query.op == cmpEq {
+					ids, more, err = a.store.queryDocsCtx(c.Request.Context(), database, plan.index, encoded, query.limit, afterID)
+				} else if err == nil {
+					var page indexPage
+					page, err = a.store.queryRangePage(c.Request.Context(), database, plan.index, query.op, encoded, query.limit, lastValue, afterID)
+					ids, lastValue, more = page.ids, page.lastValue, page.more
+				}
+				if err == nil && more {
+					cursor, err = encodeQueryCursor(box, queryCursor{database: database, index: plan.index, op: query.op, value: encoded, lastValue: lastValue, id: ids[len(ids)-1]})
+				}
+			}
+		}
+	} else if err == nil {
+		if query.cursor != "" && validateID(query.cursor) != nil {
+			writeError(c, http.StatusBadRequest, "invalid_cursor", "Cursor is invalid")
+
+			return
+		}
+		ids, more, err = a.store.queryPathDocs(c.Request.Context(), database, plan.path, query.op, query.value, query.limit, query.cursor)
+		if more {
+			cursor = ids[len(ids)-1]
+		}
+	}
+	if errors.Is(err, errInvalidQueryCursor) {
+		writeError(c, http.StatusBadRequest, "invalid_cursor", "Cursor is invalid")
+
+		return
+	}
 	if errors.Is(err, errDBNotFound) {
 		writeError(c, http.StatusNotFound, "database_not_found", "Database does not exist")
 
@@ -406,10 +442,6 @@ func (a *api) queryDocs(c *gin.Context) {
 		ids = []string{}
 	}
 
-	cursor := ""
-	if more {
-		cursor = ids[len(ids)-1]
-	}
 	c.JSON(http.StatusOK, docList{Documents: ids, Cursor: cursor})
 }
 
