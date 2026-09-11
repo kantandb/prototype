@@ -39,6 +39,7 @@ func run(ctx context.Context, cfg config, log *slog.Logger) (runErr error) {
 	}
 
 	store, err := openStore(cfg.dataPath, masterKey)
+	clear(masterKey)
 	if err != nil {
 		return fmt.Errorf("opening storage: %w", err)
 	}
