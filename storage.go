@@ -106,7 +106,7 @@ func (s *store) createDB(name string, defs ...indexDef) (createErr error) {
 		return errDBExists
 	}
 
-	record, err := makeDBRecord()
+	record, err := s.makeDBRecord(dbKey(name))
 	if err != nil {
 		return err
 	}
@@ -572,26 +572,32 @@ func (s *store) readDoc(key []byte) (doc storedDoc, readErr error) {
 }
 
 func validDBRecord(value []byte) bool {
-	return len(value) == 1+cursorKeySize && value[0] == dbRecordVersion
+	return len(value) == dbRecordHeaderLen+keySize+gcmTagLen && value[0] == dbRecordVersion && value[1] == wrappingKey1
 }
 
-func makeDBRecord() ([]byte, error) {
-	value := make([]byte, 1+cursorKeySize)
-	value[0] = dbRecordVersion
-	if _, err := rand.Read(value[1:]); err != nil {
-		return nil, fmt.Errorf("generating cursor key: %w", err)
+func (s *store) makeDBRecord(pebbleKey []byte) ([]byte, error) {
+	key := make([]byte, keySize)
+	if _, err := rand.Read(key); err != nil {
+		return nil, fmt.Errorf("generating database key: %w", err)
+	}
+	defer clear(key)
+
+	record, err := wrapDBKey(s.wrappingKey, pebbleKey, key)
+	if err != nil {
+		return nil, fmt.Errorf("wrapping database key: %w", err)
 	}
 
-	return value, nil
+	return record, nil
 }
 
-func (s *store) cursorKey(name string) (key []byte, readErr error) {
-	value, closer, err := s.db.Get(dbKey(name))
+func (s *store) databaseKey(name string) (key []byte, readErr error) {
+	pebbleKey := dbKey(name)
+	value, closer, err := s.db.Get(pebbleKey)
 	if errors.Is(err, pebble.ErrNotFound) {
 		return nil, errDBNotFound
 	}
 	if err != nil {
-		return nil, wrapStore("reading database cursor key", err)
+		return nil, wrapStore("reading database key", err)
 	}
 	defer func() {
 		if err := closer.Close(); err != nil {
@@ -599,11 +605,16 @@ func (s *store) cursorKey(name string) (key []byte, readErr error) {
 		}
 	}()
 
-	if !validDBRecord(value) {
+	key, err = unwrapDBKey(s.wrappingKey, pebbleKey, value)
+	if err != nil {
 		return nil, fmt.Errorf("%w: database %q", errCorruptData, name)
 	}
 
-	return bytes.Clone(value[1:]), nil
+	return key, nil
+}
+
+func (s *store) cursorKey(name string) ([]byte, error) {
+	return s.databaseKey(name)
 }
 
 func makeRevision(previous *revision) (revision, error) {

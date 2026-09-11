@@ -57,6 +57,37 @@ func TestStoreDatabases(t *testing.T) {
 	}
 }
 
+func TestDatabaseKeys(t *testing.T) {
+	t.Parallel()
+
+	store := testStore(t)
+	if err := store.createDB("db"); err != nil {
+		t.Fatalf("createDB() error = %v", err)
+	}
+	first, err := store.databaseKey("db")
+	if err != nil {
+		t.Fatalf("databaseKey() error = %v", err)
+	}
+	record := readValue(t, store.db, dbKey("db"))
+	if bytes.Contains(record, first) {
+		t.Fatal("database record contains plaintext key")
+	}
+
+	if err := store.deleteDB("db"); err != nil {
+		t.Fatalf("deleteDB() error = %v", err)
+	}
+	if err := store.createDB("db"); err != nil {
+		t.Fatalf("createDB() after delete error = %v", err)
+	}
+	second, err := store.databaseKey("db")
+	if err != nil {
+		t.Fatalf("databaseKey() after recreate error = %v", err)
+	}
+	if bytes.Equal(first, second) {
+		t.Fatal("recreated database reused its key")
+	}
+}
+
 func TestStoreDocuments(t *testing.T) {
 	t.Parallel()
 
