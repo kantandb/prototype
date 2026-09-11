@@ -7,19 +7,33 @@ A KantanDB "database" is therefore a named collection inside one Pebble store, n
 ```text
 -data directory
 └── one Pebble store
-    ├── database records and cursor keys
-    ├── document records (the primary index)
+    ├── encrypted store metadata
+    ├── wrapped database keys
+    ├── encrypted document records
     ├── secondary-index definitions
-    └── secondary-index entries
+    └── plaintext secondary-index entries
 ```
+
+## Encryption boundary
+
+Document JSON is compressed and encrypted before it reaches Pebble. This protects document bodies in WAL and SST files when the master-key file is stored separately.
+
+Encryption does not hide database names, index names, document IDs, indexed values, record sizes, or plaintext left in old stores and backups. Pebble needs plaintext secondary-index values for ordered scans.
+
+The `-key-file` must contain one base64-encoded 32-byte key. KantanDB derives a store wrapping key from it and a random 32-byte store salt. Each database has a random 32-byte key stored only as AES-256-GCM ciphertext. HKDF-SHA256 derives separate cursor and per-document keys from the database key.
+
+Deleting and recreating a database creates a new database key. Its old documents and cursors cannot be used with the new database.
 
 ## Logical key layout
 
 The first byte of every key says what kind of record follows. Names and IDs are included in the key, so Pebble's byte ordering groups related records together.
 
 ```text
+0x00
+    Store metadata: version | key ID | salt | nonce | encrypted verifier
+
 0x01 | database
-    Database record: format version | cursor encryption key
+    Database record: version | key ID | nonce | encrypted database key
 
 0x02 | database | 0x00 | document ID
     Document record / primary index entry
@@ -31,19 +45,22 @@ The first byte of every key says what kind of record follows. Names and IDs are 
     Secondary-index entry
 ```
 
-Lengths are unsigned variable-length integers. They keep adjacent names unambiguous. Each database record contains a format-version byte and a random 256-bit cursor encryption key. The key is created with the database, persists across server restarts, and is deleted with it. Consequently, cursors cannot be reused across databases or after deleting and recreating a database.
+Lengths in keys are unsigned variable-length integers. The encrypted formats use fixed-width headers. Version 1 supports wrapping-key ID 1 and cipher suite 1 only.
 
 ## Documents and the primary index
 
 A document's key contains its database name and ID. Its value is:
 
 ```text
-format version (1 byte) | revision (16 bytes) | canonical JSON object
+version (1) | suite (1) | revision (16) | original length (8) |
+nonce (12) | encrypted Zstandard data | GCM tag (16)
 ```
 
-This key space is the primary index. There is no separate ID-to-document lookup table: reading an ID fetches the document record directly. Scanning the prefix `0x02 | database | 0x00` lists that database's IDs in byte order. IDs are UUIDv7 strings, so this order normally follows creation time.
+Suite 1 uses Zstandard, HKDF-SHA256, and AES-256-GCM. The exact Pebble key and visible header are authenticated as associated data. Changing the database name, ID, revision, size, nonce, ciphertext, or tag makes the record unreadable.
 
-The random 16-byte revision is exposed as the document ETag and changes when the document changes.
+KantanDB authenticates the header before trusting the original length. Decompression has a 64 MiB output limit and must produce exactly the authenticated length. Listing IDs checks only the fixed envelope shape; it does not decrypt each body.
+
+This key space is the primary index. There is no separate ID lookup table. Scanning `0x02 | database | 0x00` lists IDs in byte order. UUIDv7 IDs normally sort by creation time. The random revision is the document ETag.
 
 ## Secondary indexes
 
@@ -93,3 +110,7 @@ Each range query uses a Pebble snapshot, so its page sees a consistent view. The
 Document creation, replacement, patching, and deletion update the primary record and all affected secondary entries in one synced Pebble batch. Readers cannot see a document change without its matching index change.
 
 Deleting a logical database removes its database record and the ranges containing its documents, index definitions, and index entries in one batch.
+
+## Format compatibility
+
+Storage formats are unstable during the prototype phase. KantanDB does not read or migrate plaintext records. A directory with data but no valid encrypted-store metadata fails to open. Upgrades may require deleting the data directory.

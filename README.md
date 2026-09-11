@@ -1,11 +1,15 @@
 # KantanDB prototype
 
-Start the server:
+Create a 256-bit master key, keep it outside the data directory, then start the server:
 
 ```sh
+openssl rand -base64 32 > kantan.key
+chmod 600 kantan.key
 mise run build
-./kantan -addr :8080 -data data -max-body-bytes 1048576
+./kantan -addr :8080 -data data -key-file kantan.key -max-body-bytes 1048576
 ```
+
+`-key-file` is required. Its file must contain one base64-encoded 32-byte key. Losing the key makes the data unreadable. Using the wrong key or opening an older plaintext store fails at startup.
 
 ## HTTP examples
 
