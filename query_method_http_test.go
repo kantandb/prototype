@@ -143,6 +143,8 @@ func TestPathQueryContractHTTP(t *testing.T) {
 		{name: "bad limit", path: "/users", body: `{"path":"$.age","value":1,"limit":0}`, contentType: "application/json", status: http.StatusBadRequest, code: "invalid_query"},
 		{name: "bad cursor", path: "/users", body: `{"path":"$.age","value":1,"cursor":"bad"}`, contentType: "application/json", status: http.StatusBadRequest, code: "invalid_cursor"},
 		{name: "invalid path", path: "/users", body: `{"path":"age","value":1}`, contentType: "application/json", status: http.StatusBadRequest, code: "invalid_query"},
+		{name: "expanding path", path: "/users", body: `{"path":"$..*..*","value":1}`, contentType: "application/json", status: http.StatusBadRequest, code: "invalid_query"},
+		{name: "union path", path: "/users", body: `{"path":"$['a','a']","value":1}`, contentType: "application/json", status: http.StatusBadRequest, code: "invalid_query"},
 		{name: "missing database", path: "/missing", body: `{"path":"$.age","value":1}`, contentType: "application/json", status: http.StatusNotFound, code: "database_not_found"},
 		{name: "body too large", path: "/users", body: strings.Repeat(" ", 257), contentType: "application/json", status: http.StatusRequestEntityTooLarge, code: "content_too_large"},
 	}

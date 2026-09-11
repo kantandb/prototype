@@ -142,4 +142,4 @@ For an unfiltered list, the cursor is the last document ID. For an indexed query
 
 QUERY cursors are opaque and authenticated. They bind the method, database, normalized path, operator, value, chosen order, and scan position. Send one only with the same request body, apart from `limit`. A cursor stays valid after restart but becomes invalid if the database is deleted and recreated.
 
-QUERY bodies are limited to 64 KiB. Paths are limited to 256 bytes, 16 levels of bracket or parenthesis nesting, and 32 top-level segments. The full RFC 9535 syntax is accepted within those limits.
+QUERY bodies are limited to 64 KiB. Paths are limited to 256 bytes, 16 levels of bracket or parenthesis nesting, and 32 top-level segments. To bound evaluation, paths may contain at most one descendant segment and one selector per segment. A document may contain at most 1,000,000 JSON nodes for scan evaluation.

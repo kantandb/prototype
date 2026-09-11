@@ -21,10 +21,14 @@ const (
 	maxQueryPath    = 256
 	maxPathDepth    = 16
 	maxPathSegments = 32
+	maxQueryNodes   = 1_000_000
 	maxScanDocs     = 10_000
 )
 
-var errInvalidPath = errors.New("invalid JSONPath")
+var (
+	errInvalidPath = errors.New("invalid JSONPath")
+	errQueryLimit  = errors.New("query exceeded the evaluation limit")
+)
 
 type pathQuery struct {
 	path   string
@@ -142,7 +146,7 @@ func (s *store) planPathQuery(database, raw string) (pathPlan, error) {
 	if err != nil {
 		return pathPlan{}, fmt.Errorf("%w: %v", errInvalidPath, err)
 	}
-	if len(path.Query().Segments()) > maxPathSegments {
+	if len(path.Query().Segments()) > maxPathSegments || !safePath(path.String()) {
 		return pathPlan{}, errInvalidPath
 	}
 	plan := pathPlan{path: path, text: path.String()}
@@ -213,6 +217,37 @@ func validatePathText(path string) error {
 	}
 
 	return nil
+}
+
+func safePath(path string) bool {
+	var quote byte
+	escaped := false
+	descendants := 0
+	for i := range len(path) {
+		char := path[i]
+		if quote != 0 {
+			if escaped {
+				escaped = false
+			} else if char == '\\' {
+				escaped = true
+			} else if char == quote {
+				quote = 0
+			}
+			continue
+		}
+		switch char {
+		case '\'', '"':
+			quote = char
+		case ',':
+			return false
+		case '.':
+			if i > 0 && path[i-1] == '.' {
+				descendants++
+			}
+		}
+	}
+
+	return descendants <= 1
 }
 
 func jsonPathPointer(path *jsonpath.Path) (string, bool) {
@@ -311,7 +346,11 @@ func (s *store) queryPathDocs(ctx context.Context, database string, path *jsonpa
 		if err := decoder.Decode(&root); err != nil {
 			return pathPage{}, fmt.Errorf("%w: invalid document JSON", errCorruptData)
 		}
-		if pathMatches(path, root, op, encoded) {
+		matches, err := pathMatches(ctx, path, root, op, encoded, maxQueryNodes)
+		if err != nil {
+			return pathPage{}, err
+		}
+		if matches {
 			page.ids = append(page.ids, id)
 		}
 		if len(page.ids) > limit {
@@ -393,8 +432,16 @@ func (s *store) executePathQuery(ctx context.Context, database string, plan path
 	return ids, token, nil
 }
 
-func pathMatches(path *jsonpath.Path, root any, op cmpOp, expected []byte) bool {
-	for _, value := range path.Select(root) {
+func pathMatches(ctx context.Context, path *jsonpath.Path, root any, op cmpOp, expected []byte, maxNodes int) (bool, error) {
+	if err := checkQueryNodes(ctx, root, maxNodes); err != nil {
+		return false, err
+	}
+
+	values := path.Select(root)
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	for _, value := range values {
 		actual, err := encodeIndexValue(value)
 		if err != nil || actual[0] != expected[0] {
 			continue
@@ -402,9 +449,35 @@ func pathMatches(path *jsonpath.Path, root any, op cmpOp, expected []byte) bool 
 
 		order := bytes.Compare(actual, expected)
 		if op == cmpEq && order == 0 || op == cmpLT && order < 0 || op == cmpLE && order <= 0 || op == cmpGT && order > 0 || op == cmpGE && order >= 0 {
-			return true
+			return true, nil
 		}
 	}
 
-	return false
+	return false, nil
+}
+
+func checkQueryNodes(ctx context.Context, root any, limit int) error {
+	stack := []any{root}
+	for work := 0; len(stack) > 0; work++ {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if work >= limit {
+			return errQueryLimit
+		}
+
+		last := len(stack) - 1
+		value := stack[last]
+		stack = stack[:last]
+		switch value := value.(type) {
+		case []any:
+			stack = append(stack, value...)
+		case map[string]any:
+			for _, child := range value {
+				stack = append(stack, child)
+			}
+		}
+	}
+
+	return nil
 }

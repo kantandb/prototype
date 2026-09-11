@@ -54,6 +54,21 @@ func TestValidatePathText(t *testing.T) {
 	}
 }
 
+func TestSafePath(t *testing.T) {
+	t.Parallel()
+
+	for _, path := range []string{`$..items[*].name`, `$.items[?(@.name == "a,b")]`} {
+		if !safePath(path) {
+			t.Errorf("safePath(%q) = false", path)
+		}
+	}
+	for _, path := range []string{`$..*..*`, `$["a","a"]`} {
+		if safePath(path) {
+			t.Errorf("safePath(%q) = true", path)
+		}
+	}
+}
+
 func TestPlanPathQuery(t *testing.T) {
 	t.Parallel()
 
@@ -76,6 +91,25 @@ func TestPlanPathQuery(t *testing.T) {
 	}
 	if plan.index != "" {
 		t.Errorf("descendant index = %q, want scan", plan.index)
+	}
+}
+
+func TestPathMatchLimits(t *testing.T) {
+	t.Parallel()
+
+	path := jsonpath.MustParse(`$[*]`)
+	expected, err := encodeIndexValue(1)
+	if err != nil {
+		t.Fatalf("encodeIndexValue() error = %v", err)
+	}
+	if _, err := pathMatches(context.Background(), path, []any{1, 2}, cmpEq, expected, 2); !errors.Is(err, errQueryLimit) {
+		t.Errorf("pathMatches() error = %v, want query limit", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := pathMatches(ctx, path, []any{1}, cmpEq, expected, 10); !errors.Is(err, context.Canceled) {
+		t.Errorf("pathMatches() error = %v, want context canceled", err)
 	}
 }
 

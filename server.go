@@ -418,6 +418,11 @@ func (a *api) queryDocs(c *gin.Context) {
 
 		return
 	}
+	if errors.Is(err, errQueryLimit) {
+		writeError(c, http.StatusServiceUnavailable, "query_limit", "Query exceeded the evaluation limit")
+
+		return
+	}
 	if err != nil {
 		a.fail(c, "query documents", err)
 
