@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"crypto/cipher"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -261,11 +262,20 @@ func (a *api) listDocs(c *gin.Context) {
 	var ids []string
 	var encoded []byte
 	var lastValue []byte
+	var box cipher.AEAD
 	var more bool
 	var err error
 	if query.indexed {
+		var key []byte
+		key, err = a.store.cursorKey(database)
+		if err == nil {
+			box, err = newQueryCipher(key)
+		}
+
 		var cursor string
-		encoded, lastValue, cursor, err = queryStart(database, query)
+		if err == nil {
+			encoded, lastValue, cursor, err = queryStart(box, database, query)
+		}
 		if errors.Is(err, errInvalidQueryCursor) {
 			writeError(c, http.StatusBadRequest, "invalid_cursor", "Cursor is invalid")
 
@@ -309,7 +319,7 @@ func (a *api) listDocs(c *gin.Context) {
 
 	cursor := ""
 	if more && query.indexed {
-		cursor, err = encodeQueryCursor(queryCursor{database: database, index: query.index, op: query.op, value: encoded, lastValue: lastValue, id: ids[len(ids)-1]})
+		cursor, err = encodeQueryCursor(box, queryCursor{database: database, index: query.index, op: query.op, value: encoded, lastValue: lastValue, id: ids[len(ids)-1]})
 		if err != nil {
 			a.fail(c, "encode query cursor", err)
 
@@ -322,7 +332,7 @@ func (a *api) listDocs(c *gin.Context) {
 	c.JSON(http.StatusOK, docList{Documents: ids, Cursor: cursor})
 }
 
-func queryStart(database string, query docQuery) ([]byte, []byte, string, error) {
+func queryStart(box cipher.AEAD, database string, query docQuery) ([]byte, []byte, string, error) {
 	encoded, err := encodeIndexValue(query.value)
 	if err != nil {
 		return nil, nil, "", err
@@ -331,7 +341,7 @@ func queryStart(database string, query docQuery) ([]byte, []byte, string, error)
 		return encoded, nil, "", nil
 	}
 
-	cursor, err := decodeQueryCursor(query.cursor)
+	cursor, err := decodeQueryCursor(box, query.cursor)
 	if err != nil || cursor.database != database || cursor.index != query.index || cursor.op != query.op || !bytes.Equal(cursor.value, encoded) {
 		return nil, nil, "", errInvalidQueryCursor
 	}

@@ -28,7 +28,10 @@ var (
 	idxDataPrefix = []byte{0x04}
 )
 
-const recordVersion byte = 1
+const (
+	recordVersion byte = 1
+	cursorKeySize int  = 32
+)
 
 const (
 	dbStripeCount  = 64
@@ -94,6 +97,11 @@ func (s *store) createDB(name string, defs ...indexDef) (createErr error) {
 		return errDBExists
 	}
 
+	record, err := makeDBRecord()
+	if err != nil {
+		return err
+	}
+
 	batch := s.db.NewBatch()
 	defer func() {
 		if err := batch.Close(); err != nil {
@@ -101,7 +109,7 @@ func (s *store) createDB(name string, defs ...indexDef) (createErr error) {
 		}
 	}()
 
-	if err := batch.Set(dbKey(name), []byte{recordVersion}, nil); err != nil {
+	if err := batch.Set(dbKey(name), record, nil); err != nil {
 		return wrapStore("queuing database", err)
 	}
 	for _, def := range defs {
@@ -555,7 +563,38 @@ func (s *store) readDoc(key []byte) (doc storedDoc, readErr error) {
 }
 
 func validDBRecord(value []byte) bool {
-	return len(value) == 1 && value[0] == recordVersion
+	return len(value) == 1+cursorKeySize && value[0] == recordVersion
+}
+
+func makeDBRecord() ([]byte, error) {
+	value := make([]byte, 1+cursorKeySize)
+	value[0] = recordVersion
+	if _, err := rand.Read(value[1:]); err != nil {
+		return nil, fmt.Errorf("generating cursor key: %w", err)
+	}
+
+	return value, nil
+}
+
+func (s *store) cursorKey(name string) (key []byte, readErr error) {
+	value, closer, err := s.db.Get(dbKey(name))
+	if errors.Is(err, pebble.ErrNotFound) {
+		return nil, errDBNotFound
+	}
+	if err != nil {
+		return nil, wrapStore("reading database cursor key", err)
+	}
+	defer func() {
+		if err := closer.Close(); err != nil {
+			readErr = errors.Join(readErr, wrapStore("closing database value", err))
+		}
+	}()
+
+	if !validDBRecord(value) {
+		return nil, fmt.Errorf("%w: database %q", errCorruptData, name)
+	}
+
+	return bytes.Clone(value[1:]), nil
 }
 
 func makeRevision(previous *revision) (revision, error) {

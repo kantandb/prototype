@@ -7,7 +7,7 @@ A KantanDB "database" is therefore a named collection inside one Pebble store, n
 ```text
 -data directory
 └── one Pebble store
-    ├── database records
+    ├── database records and cursor keys
     ├── document records (the primary index)
     ├── secondary-index definitions
     └── secondary-index entries
@@ -19,7 +19,7 @@ The first byte of every key says what kind of record follows. Names and IDs are 
 
 ```text
 0x01 | database
-    Database record
+    Database record: format version | cursor encryption key
 
 0x02 | database | 0x00 | document ID
     Document record / primary index entry
@@ -31,7 +31,7 @@ The first byte of every key says what kind of record follows. Names and IDs are 
     Secondary-index entry
 ```
 
-Lengths are unsigned variable-length integers. They keep adjacent names unambiguous. The database record contains only a format-version byte.
+Lengths are unsigned variable-length integers. They keep adjacent names unambiguous. Each database record contains a format-version byte and a random 256-bit cursor encryption key. The key is created with the database, persists across server restarts, and is deleted with it. Consequently, cursors cannot be reused across databases or after deleting and recreating a database.
 
 ## Documents and the primary index
 
