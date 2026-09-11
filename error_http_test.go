@@ -80,7 +80,7 @@ func TestCorruptionIsMappedAndLogged(t *testing.T) {
 	if strings.Contains(body, "invalid document record") {
 		t.Errorf("response exposed internal error: %s", body)
 	}
-	if !strings.Contains(logs.String(), `"operation":"read document"`) || !strings.Contains(logs.String(), "invalid document record") {
+	if !strings.Contains(logs.String(), `"operation":"read document"`) || !strings.Contains(logs.String(), "corrupt stored data") {
 		t.Errorf("log = %s", logs.String())
 	}
 }

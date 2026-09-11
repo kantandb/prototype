@@ -222,16 +222,14 @@ func (s *store) createDoc(database, id string, json []byte) (rev revision, creat
 	docMu.Lock()
 	defer docMu.Unlock()
 
-	exists, err := s.hasDB(database)
+	databaseKey, err := s.databaseKey(database)
 	if err != nil {
-		return revision{}, fmt.Errorf("checking database: %w", err)
+		return revision{}, err
 	}
-	if !exists {
-		return revision{}, errDBNotFound
-	}
+	defer clear(databaseKey)
 
 	key := docKey(database, id)
-	exists, err = s.has(key)
+	exists, err := s.has(key)
 	if err != nil {
 		return revision{}, fmt.Errorf("checking document: %w", err)
 	}
@@ -252,6 +250,11 @@ func (s *store) createDoc(database, id string, json []byte) (rev revision, creat
 		return revision{}, err
 	}
 
+	record, err := sealDoc(key, databaseKey, id, rev, json)
+	if err != nil {
+		return revision{}, fmt.Errorf("sealing document: %w", err)
+	}
+
 	batch := s.db.NewBatch()
 	defer func() {
 		if err := batch.Close(); err != nil {
@@ -259,7 +262,7 @@ func (s *store) createDoc(database, id string, json []byte) (rev revision, creat
 		}
 	}()
 
-	if err := batch.Set(key, encodeDoc(json, rev), nil); err != nil {
+	if err := batch.Set(key, record, nil); err != nil {
 		return revision{}, wrapStore("queuing document", err)
 	}
 	if err := setIndexEntries(batch, database, id, values); err != nil {
@@ -273,7 +276,17 @@ func (s *store) createDoc(database, id string, json []byte) (rev revision, creat
 }
 
 func (s *store) getDoc(database, id string) (storedDoc, error) {
-	return s.readDoc(docKey(database, id))
+	dbMu := s.dbLock(database)
+	dbMu.RLock()
+	defer dbMu.RUnlock()
+
+	databaseKey, err := s.documentDBKey(database)
+	if err != nil {
+		return storedDoc{}, err
+	}
+	defer clear(databaseKey)
+
+	return s.readDoc(database, id, databaseKey)
 }
 
 func (s *store) listDocs(database string, limit int, cursor string) (ids []string, more bool, listErr error) {
@@ -314,8 +327,8 @@ func (s *store) listDocs(database string, limit int, cursor string) (ids []strin
 
 	for ; valid && len(ids) <= limit; valid = iter.Next() {
 		id := string(iter.Key()[len(prefix):])
-		if _, err := decodeDoc(iter.Value()); err != nil {
-			return nil, false, fmt.Errorf("%w: document %q: %v", errCorruptData, id, err)
+		if _, _, _, err := parseDocRecord(iter.Value()); err != nil {
+			return nil, false, fmt.Errorf("%w: document %q", errCorruptData, id)
 		}
 
 		ids = append(ids, id)
@@ -339,8 +352,14 @@ func (s *store) replaceDoc(database, id string, json []byte, match matchCond) (r
 	docMu.Lock()
 	defer docMu.Unlock()
 
+	databaseKey, err := s.documentDBKey(database)
+	if err != nil {
+		return revision{}, err
+	}
+	defer clear(databaseKey)
+
 	key := docKey(database, id)
-	current, err := s.readDoc(key)
+	current, err := s.readDoc(database, id, databaseKey)
 	if err != nil {
 		return revision{}, err
 	}
@@ -365,6 +384,11 @@ func (s *store) replaceDoc(database, id string, json []byte, match matchCond) (r
 		return revision{}, err
 	}
 
+	record, err := sealDoc(key, databaseKey, id, rev, json)
+	if err != nil {
+		return revision{}, fmt.Errorf("sealing document replacement: %w", err)
+	}
+
 	batch := s.db.NewBatch()
 	defer func() {
 		if err := batch.Close(); err != nil {
@@ -372,7 +396,7 @@ func (s *store) replaceDoc(database, id string, json []byte, match matchCond) (r
 		}
 	}()
 
-	if err := batch.Set(key, encodeDoc(json, rev), nil); err != nil {
+	if err := batch.Set(key, record, nil); err != nil {
 		return revision{}, wrapStore("queuing document replacement", err)
 	}
 	if err := changeIndexEntries(batch, database, id, oldValues, newValues); err != nil {
@@ -394,8 +418,14 @@ func (s *store) patchDoc(database, id string, match matchCond, apply func([]byte
 	docMu.Lock()
 	defer docMu.Unlock()
 
+	databaseKey, err := s.documentDBKey(database)
+	if err != nil {
+		return storedDoc{}, err
+	}
+	defer clear(databaseKey)
+
 	key := docKey(database, id)
-	current, err := s.readDoc(key)
+	current, err := s.readDoc(database, id, databaseKey)
 	if err != nil {
 		return storedDoc{}, err
 	}
@@ -425,6 +455,11 @@ func (s *store) patchDoc(database, id string, match matchCond, apply func([]byte
 	}
 	doc = storedDoc{json: json, revision: rev}
 
+	record, err := sealDoc(key, databaseKey, id, rev, json)
+	if err != nil {
+		return storedDoc{}, fmt.Errorf("sealing patched document: %w", err)
+	}
+
 	batch := s.db.NewBatch()
 	defer func() {
 		if err := batch.Close(); err != nil {
@@ -432,7 +467,7 @@ func (s *store) patchDoc(database, id string, match matchCond, apply func([]byte
 		}
 	}()
 
-	if err := batch.Set(key, encodeDoc(json, rev), nil); err != nil {
+	if err := batch.Set(key, record, nil); err != nil {
 		return storedDoc{}, wrapStore("queuing patched document", err)
 	}
 	if err := changeIndexEntries(batch, database, id, oldValues, newValues); err != nil {
@@ -454,8 +489,14 @@ func (s *store) deleteDoc(database, id string, match matchCond) (deleteErr error
 	docMu.Lock()
 	defer docMu.Unlock()
 
+	databaseKey, err := s.documentDBKey(database)
+	if err != nil {
+		return err
+	}
+	defer clear(databaseKey)
+
 	key := docKey(database, id)
-	current, err := s.readDoc(key)
+	current, err := s.readDoc(database, id, databaseKey)
 	if err != nil {
 		return err
 	}
@@ -549,7 +590,8 @@ func (s *store) has(key []byte) (bool, error) {
 	return true, nil
 }
 
-func (s *store) readDoc(key []byte) (doc storedDoc, readErr error) {
+func (s *store) readDoc(database, id string, databaseKey []byte) (doc storedDoc, readErr error) {
+	key := docKey(database, id)
 	value, closer, err := s.db.Get(key)
 	if errors.Is(err, pebble.ErrNotFound) {
 		return storedDoc{}, errDocNotFound
@@ -563,9 +605,9 @@ func (s *store) readDoc(key []byte) (doc storedDoc, readErr error) {
 		}
 	}()
 
-	doc, err = decodeDoc(value)
+	doc, err = openDoc(key, databaseKey, id, value)
 	if err != nil {
-		return storedDoc{}, fmt.Errorf("%w: %v", errCorruptData, err)
+		return storedDoc{}, fmt.Errorf("%w: document %q", errCorruptData, id)
 	}
 
 	return doc, nil
@@ -588,6 +630,15 @@ func (s *store) makeDBRecord(pebbleKey []byte) ([]byte, error) {
 	}
 
 	return record, nil
+}
+
+func (s *store) documentDBKey(name string) ([]byte, error) {
+	key, err := s.databaseKey(name)
+	if errors.Is(err, errDBNotFound) {
+		return nil, errDocNotFound
+	}
+
+	return key, err
 }
 
 func (s *store) databaseKey(name string) (key []byte, readErr error) {
@@ -627,28 +678,6 @@ func makeRevision(previous *revision) (revision, error) {
 			return rev, nil
 		}
 	}
-}
-
-// A versioned binary header keeps metadata outside user JSON.
-func encodeDoc(json []byte, rev revision) []byte {
-	value := make([]byte, 1+len(rev)+len(json))
-	value[0] = docRecordVersion
-	copy(value[1:], rev[:])
-	copy(value[1+len(rev):], json)
-
-	return value
-}
-
-func decodeDoc(value []byte) (storedDoc, error) {
-	if len(value) < 1+len(revision{}) || value[0] != docRecordVersion {
-		return storedDoc{}, errors.New("invalid document record")
-	}
-
-	var rev revision
-	copy(rev[:], value[1:1+len(rev)])
-	json := append([]byte(nil), value[1+len(rev):]...)
-
-	return storedDoc{json: json, revision: rev}, nil
 }
 
 func dbKey(name string) []byte {

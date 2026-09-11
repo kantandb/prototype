@@ -539,21 +539,6 @@ func TestStoreRejectsCorruption(t *testing.T) {
 	}
 }
 
-func TestDecodeDocRejectsCorruption(t *testing.T) {
-	t.Parallel()
-
-	tests := [][]byte{
-		nil,
-		{docRecordVersion},
-		append([]byte{docRecordVersion + 1}, make([]byte, 16)...),
-	}
-	for _, value := range tests {
-		if _, err := decodeDoc(value); err == nil {
-			t.Errorf("decodeDoc(%x) error = nil, want error", value)
-		}
-	}
-}
-
 func testStore(t *testing.T) *store {
 	t.Helper()
 
