@@ -33,7 +33,12 @@ func main() {
 }
 
 func run(ctx context.Context, cfg config, log *slog.Logger) (runErr error) {
-	store, err := openStore(cfg.dataPath)
+	masterKey, err := loadMasterKey(cfg.keyFile)
+	if err != nil {
+		return fmt.Errorf("loading master key: %w", err)
+	}
+
+	store, err := openStore(cfg.dataPath, masterKey)
 	if err != nil {
 		return fmt.Errorf("opening storage: %w", err)
 	}

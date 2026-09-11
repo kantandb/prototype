@@ -242,7 +242,7 @@ func TestHTTPDurabilityAcrossRestarts(t *testing.T) {
 	var server *httptest.Server
 	start := func() {
 		var err error
-		store, err = openStore(dataPath)
+		store, err = openStore(dataPath, testMasterKey)
 		if err != nil {
 			t.Fatalf("openStore() error = %v", err)
 		}

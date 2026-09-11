@@ -44,7 +44,7 @@ func TestDatabaseLifecycleHTTP(t *testing.T) {
 func TestCreateDatabaseIndexesHTTP(t *testing.T) {
 	t.Parallel()
 
-	store, err := openStore(t.TempDir())
+	store, err := openStore(t.TempDir(), testMasterKey)
 	if err != nil {
 		t.Fatalf("openStore() error = %v", err)
 	}
@@ -178,7 +178,7 @@ func TestDeleteDatabaseValidatesNameHTTP(t *testing.T) {
 func newTestServer(t *testing.T, maxBodyBytes int64) *httptest.Server {
 	t.Helper()
 
-	store, err := openStore(t.TempDir())
+	store, err := openStore(t.TempDir(), testMasterKey)
 	if err != nil {
 		t.Fatalf("openStore() error = %v", err)
 	}

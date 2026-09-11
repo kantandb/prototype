@@ -60,7 +60,7 @@ func storeOptions() *pebble.Options {
 	}
 }
 
-func openStore(path string) (*store, error) {
+func openStore(path string, _ []byte) (*store, error) {
 	db, err := pebble.Open(path, storeOptions())
 	if err != nil {
 		return nil, fmt.Errorf("opening Pebble: %w", err)

@@ -604,7 +604,7 @@ func TestStorePersistsIndexes(t *testing.T) {
 	t.Parallel()
 
 	path := t.TempDir()
-	store, err := openStore(path)
+	store, err := openStore(path, testMasterKey)
 	if err != nil {
 		t.Fatalf("openStore() error = %v", err)
 	}
@@ -618,7 +618,7 @@ func TestStorePersistsIndexes(t *testing.T) {
 		t.Fatalf("close() error = %v", err)
 	}
 
-	store, err = openStore(path)
+	store, err = openStore(path, testMasterKey)
 	if err != nil {
 		t.Fatalf("reopen store error = %v", err)
 	}

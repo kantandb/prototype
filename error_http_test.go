@@ -88,7 +88,7 @@ func TestCorruptionIsMappedAndLogged(t *testing.T) {
 func TestClosedStorageReturnsUnavailable(t *testing.T) {
 	t.Parallel()
 
-	store, err := openStore(t.TempDir())
+	store, err := openStore(t.TempDir(), testMasterKey)
 	if err != nil {
 		t.Fatalf("openStore() error = %v", err)
 	}

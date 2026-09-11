@@ -16,6 +16,7 @@ func TestRunStopsWithContext(t *testing.T) {
 	cfg := config{
 		addr:         "127.0.0.1:0",
 		dataPath:     t.TempDir(),
+		keyFile:      writeTestKey(t),
 		maxBodyBytes: defaultMaxBodyBytes,
 	}
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))

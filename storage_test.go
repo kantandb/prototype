@@ -208,7 +208,7 @@ func TestStorePersists(t *testing.T) {
 	t.Parallel()
 
 	path := t.TempDir()
-	store, err := openStore(path)
+	store, err := openStore(path, testMasterKey)
 	if err != nil {
 		t.Fatalf("openStore() error = %v", err)
 	}
@@ -223,7 +223,7 @@ func TestStorePersists(t *testing.T) {
 		t.Fatalf("store.close() error = %v", err)
 	}
 
-	store, err = openStore(path)
+	store, err = openStore(path, testMasterKey)
 	if err != nil {
 		t.Fatalf("reopen store error = %v", err)
 	}
@@ -526,7 +526,7 @@ func TestDecodeDocRejectsCorruption(t *testing.T) {
 func testStore(t *testing.T) *store {
 	t.Helper()
 
-	store, err := openStore(t.TempDir())
+	store, err := openStore(t.TempDir(), testMasterKey)
 	if err != nil {
 		t.Fatalf("openStore() error = %v", err)
 	}
