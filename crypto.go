@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
@@ -26,6 +25,9 @@ const (
 	wrappingInfo = "kantandb/wrapping/v1"
 	cursorInfo   = "kantandb/cursor/v1"
 	documentInfo = "kantandb/document/v1"
+	storeADInfo  = "kantandb/store-metadata/v1"
+	databaseAD   = "kantandb/database-record/v1"
+	documentAD   = "kantandb/document-record/v1"
 )
 
 func initStoreCrypto(db *pebble.DB, masterKey []byte) ([]byte, error) {
@@ -87,7 +89,7 @@ func initStoreMeta(db *pebble.DB, masterKey []byte) ([]byte, error) {
 
 		return nil, fmt.Errorf("generating store nonce: %w", err)
 	}
-	value := box.Seal(header, nonce, storeVerifier[:], recordAD(storeMetaKey, header))
+	value := box.Seal(header, nonce, storeVerifier[:], recordAD(storeADInfo, storeMetaKey, header))
 	if err := db.Set(storeMetaKey, value, pebble.Sync); err != nil {
 		clear(key)
 
@@ -115,7 +117,7 @@ func openStoreMeta(value, masterKey []byte) ([]byte, error) {
 	}
 
 	nonce := header[2+storeSaltLen:]
-	plain, err := box.Open(nil, nonce, value[storeMetaHeaderLen:], recordAD(storeMetaKey, header))
+	plain, err := box.Open(nil, nonce, value[storeMetaHeaderLen:], recordAD(storeADInfo, storeMetaKey, header))
 	if err != nil || subtle.ConstantTimeCompare(plain, storeVerifier[:]) != 1 {
 		clear(key)
 		clear(plain)
@@ -200,7 +202,7 @@ func wrapDBKey(wrappingKey, pebbleKey, databaseKey []byte) ([]byte, error) {
 		return nil, fmt.Errorf("generating database-key nonce: %w", err)
 	}
 
-	return box.Seal(header, nonce, databaseKey, recordAD(pebbleKey, header)), nil
+	return box.Seal(header, nonce, databaseKey, recordAD(databaseAD, pebbleKey, header)), nil
 }
 
 func unwrapDBKey(wrappingKey, pebbleKey, value []byte) ([]byte, error) {
@@ -213,7 +215,7 @@ func unwrapDBKey(wrappingKey, pebbleKey, value []byte) ([]byte, error) {
 	}
 
 	header := value[:dbRecordHeaderLen]
-	key, err := box.Open(nil, header[2:], value[dbRecordHeaderLen:], recordAD(pebbleKey, header))
+	key, err := box.Open(nil, header[2:], value[dbRecordHeaderLen:], recordAD(databaseAD, pebbleKey, header))
 	if err != nil || len(key) != keySize {
 		clear(key)
 
@@ -236,6 +238,12 @@ func newGCM(key []byte) (cipher.AEAD, error) {
 	return box, nil
 }
 
-func recordAD(key, header []byte) []byte {
-	return bytes.Join([][]byte{key, header}, nil)
+func recordAD(domain string, key, header []byte) []byte {
+	ad := make([]byte, len(domain)+8+len(key)+len(header))
+	copy(ad, domain)
+	binary.BigEndian.PutUint64(ad[len(domain):], uint64(len(key)))
+	copy(ad[len(domain)+8:], key)
+	copy(ad[len(domain)+8+len(key):], header)
+
+	return ad
 }

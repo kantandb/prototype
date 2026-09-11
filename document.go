@@ -43,6 +43,7 @@ func sealDoc(pebbleKey, databaseKey []byte, id string, rev revision, json []byte
 		return nil, fmt.Errorf("creating Zstandard encoder: %w", err)
 	}
 	compressed := encoder.EncodeAll(json, nil)
+	defer clear(compressed)
 	if len(compressed) > maxDocRecordBytes-docRecordHeaderLen-gcmTagLen {
 		return nil, errors.New("compressed document exceeds storage limit")
 	}
@@ -61,7 +62,7 @@ func sealDoc(pebbleKey, databaseKey []byte, id string, rev revision, json []byte
 		return nil, fmt.Errorf("generating document nonce: %w", err)
 	}
 
-	return box.Seal(header, nonce, compressed, recordAD(pebbleKey, header)), nil
+	return box.Seal(header, nonce, compressed, recordAD(documentAD, pebbleKey, header)), nil
 }
 
 func openDoc(pebbleKey, databaseKey []byte, id string, value []byte) (storedDoc, error) {
@@ -80,10 +81,11 @@ func openDoc(pebbleKey, databaseKey []byte, id string, value []byte) (storedDoc,
 		return storedDoc{}, err
 	}
 	nonce := header[2+len(rev)+8:]
-	compressed, err := box.Open(nil, nonce, value[docRecordHeaderLen:], recordAD(pebbleKey, header))
+	compressed, err := box.Open(nil, nonce, value[docRecordHeaderLen:], recordAD(documentAD, pebbleKey, header))
 	if err != nil {
 		return storedDoc{}, errCorruptData
 	}
+	defer clear(compressed)
 	if length > maxStoredDocBytes {
 		return storedDoc{}, errCorruptData
 	}

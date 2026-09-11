@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"crypto/rand"
+	"encoding/binary"
 	"errors"
 	"testing"
 )
@@ -88,6 +89,33 @@ func TestDocumentCodecRejectsCorruption(t *testing.T) {
 	}
 }
 
+func TestDocumentCodecRejectsInvalidCompression(t *testing.T) {
+	t.Parallel()
+
+	databaseKey := bytes.Repeat([]byte{3}, keySize)
+	key := docKey("db", "id")
+
+	invalid := makeTestDocRecord(t, key, databaseKey, "id", []byte("invalid"), 7)
+	if _, err := openDoc(key, databaseKey, "id", invalid); !errors.Is(err, errCorruptData) {
+		t.Fatalf("openDoc() compression error = %v, want %v", err, errCorruptData)
+	}
+
+	encoder, err := docEncoder()
+	if err != nil {
+		t.Fatalf("docEncoder() error = %v", err)
+	}
+	compressed := encoder.EncodeAll([]byte(`{}`), nil)
+	mismatch := makeTestDocRecord(t, key, databaseKey, "id", compressed, 3)
+	if _, err := openDoc(key, databaseKey, "id", mismatch); !errors.Is(err, errCorruptData) {
+		t.Fatalf("openDoc() length error = %v, want %v", err, errCorruptData)
+	}
+
+	oversized := makeTestDocRecord(t, key, databaseKey, "id", compressed, maxStoredDocBytes+1)
+	if _, err := openDoc(key, databaseKey, "id", oversized); !errors.Is(err, errCorruptData) {
+		t.Fatalf("openDoc() oversized error = %v, want %v", err, errCorruptData)
+	}
+}
+
 func TestDocumentCodecIncompressible(t *testing.T) {
 	t.Parallel()
 
@@ -108,4 +136,27 @@ func TestDocumentCodecIncompressible(t *testing.T) {
 	if !bytes.Equal(doc.json, body) {
 		t.Error("openDoc() returned wrong bytes")
 	}
+}
+
+func makeTestDocRecord(t *testing.T, pebbleKey, databaseKey []byte, id string, compressed []byte, length uint64) []byte {
+	t.Helper()
+
+	key, err := deriveDocumentKey(databaseKey, id)
+	if err != nil {
+		t.Fatalf("deriveDocumentKey() error = %v", err)
+	}
+	box, err := newGCM(key)
+	if err != nil {
+		t.Fatalf("newGCM() error = %v", err)
+	}
+	header := make([]byte, docRecordHeaderLen)
+	header[0] = docRecordVersion
+	header[1] = cipherSuite1
+	binary.BigEndian.PutUint64(header[2+len(revision{}):], length)
+	nonce := header[2+len(revision{})+8:]
+	if _, err := rand.Read(nonce); err != nil {
+		t.Fatalf("rand.Read() error = %v", err)
+	}
+
+	return box.Seal(header, nonce, compressed, recordAD(documentAD, pebbleKey, header))
 }
