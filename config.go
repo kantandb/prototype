@@ -39,8 +39,8 @@ func parseConfig(args []string) (config, error) {
 	if cfg.keyFile == "" {
 		return config{}, fmt.Errorf("validating configuration: key file is empty")
 	}
-	if cfg.maxBodyBytes <= 0 {
-		return config{}, fmt.Errorf("validating configuration: max body bytes must be positive")
+	if cfg.maxBodyBytes <= 0 || cfg.maxBodyBytes > maxStoredDocBytes {
+		return config{}, fmt.Errorf("validating configuration: max body bytes must be between 1 and %d", maxStoredDocBytes)
 	}
 	if flags.NArg() != 0 {
 		return config{}, fmt.Errorf("validating configuration: unexpected arguments")

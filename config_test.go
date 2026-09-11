@@ -32,6 +32,7 @@ func TestParseConfig(t *testing.T) {
 		{name: "empty data path", args: []string{"-data", "", "-key-file", "key"}, wantErr: true},
 		{name: "missing key file", wantErr: true},
 		{name: "zero body limit", args: []string{"-max-body-bytes", "0", "-key-file", "key"}, wantErr: true},
+		{name: "excessive body limit", args: []string{"-max-body-bytes", "67108865", "-key-file", "key"}, wantErr: true},
 		{name: "unexpected argument", args: []string{"-key-file", "key", "extra"}, wantErr: true},
 		{name: "unknown flag", args: []string{"-unknown"}, wantErr: true},
 	}
