@@ -600,6 +600,37 @@ func TestDeleteDBRacesWithWrites(t *testing.T) {
 	}
 }
 
+func TestStoreAuthenticatesDatabaseRecords(t *testing.T) {
+	t.Parallel()
+
+	store := testStore(t)
+	if err := store.createDB("db"); err != nil {
+		t.Fatalf("createDB() error = %v", err)
+	}
+	if _, err := store.createDoc("db", "id", []byte(`{"ok":true}`)); err != nil {
+		t.Fatalf("createDoc() error = %v", err)
+	}
+
+	record := readValue(t, store.db, dbKey("db"))
+	record[len(record)-1] ^= 1
+	if err := store.db.Set(dbKey("db"), record, pebble.Sync); err != nil {
+		t.Fatalf("DB.Set() error = %v", err)
+	}
+
+	if exists, err := store.hasDB("db"); !exists || !errors.Is(err, errCorruptData) {
+		t.Fatalf("hasDB() = %v, %v, want true, %v", exists, err, errCorruptData)
+	}
+	if _, err := store.listDBs(100, ""); !errors.Is(err, errCorruptData) {
+		t.Fatalf("listDBs() error = %v, want %v", err, errCorruptData)
+	}
+	if _, _, err := store.listDocs("db", 100, ""); !errors.Is(err, errCorruptData) {
+		t.Fatalf("listDocs() error = %v, want %v", err, errCorruptData)
+	}
+	if err := store.deleteDB("db"); !errors.Is(err, errCorruptData) {
+		t.Fatalf("deleteDB() error = %v, want %v", err, errCorruptData)
+	}
+}
+
 func TestStoreRejectsCorruption(t *testing.T) {
 	t.Parallel()
 

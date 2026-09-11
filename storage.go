@@ -158,7 +158,7 @@ func (s *store) listDBs(limit int, cursor string) (names []string, listErr error
 
 	for ; valid && len(names) < limit; valid = iter.Next() {
 		name := string(iter.Key()[len(dbPrefix):])
-		if !validDBRecord(iter.Value()) {
+		if err := s.authDBRecord(iter.Key(), iter.Value()); err != nil {
 			return nil, fmt.Errorf("%w: database %q", errCorruptData, name)
 		}
 
@@ -565,7 +565,7 @@ func (s *store) hasDB(name string) (bool, error) {
 	if err != nil {
 		return false, wrapStore("reading database", err)
 	}
-	if !validDBRecord(value) {
+	if authErr := s.authDBRecord(dbKey(name), value); authErr != nil {
 		err = fmt.Errorf("%w: database %q", errCorruptData, name)
 	}
 	if closeErr := closer.Close(); closeErr != nil {
@@ -613,8 +613,11 @@ func (s *store) readDoc(database, id string, databaseKey []byte) (doc storedDoc,
 	return doc, nil
 }
 
-func validDBRecord(value []byte) bool {
-	return len(value) == dbRecordHeaderLen+keySize+gcmTagLen && value[0] == dbRecordVersion && value[1] == wrappingKey1
+func (s *store) authDBRecord(pebbleKey, value []byte) error {
+	key, err := unwrapDBKey(s.wrappingKey, pebbleKey, value)
+	clear(key)
+
+	return err
 }
 
 func (s *store) makeDBRecord(pebbleKey []byte) ([]byte, error) {
