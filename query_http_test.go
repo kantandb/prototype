@@ -312,16 +312,27 @@ func TestRangeValueOrderHTTP(t *testing.T) {
 	tenB := createQueryDoc(t, server, "/values/", `{"value":10.0}`)
 	want := []string{tenA, tenB, twenty}
 
-	res = sendRequest(t, server, http.MethodGet, "/values?index=value&op=ge&value=10", "", "")
-	var page docList
-	if err := json.NewDecoder(res.Body).Decode(&page); err != nil {
-		t.Fatalf("Decode() error = %v", err)
+	var documents []string
+	cursor := ""
+	for range want {
+		path := "/values?index=value&op=ge&value=10&limit=1"
+		if cursor != "" {
+			path += "&cursor=" + url.QueryEscape(cursor)
+		}
+		res = sendRequest(t, server, http.MethodGet, path, "", "")
+
+		var page docList
+		if err := json.NewDecoder(res.Body).Decode(&page); err != nil {
+			t.Fatalf("Decode() error = %v", err)
+		}
+		if err := res.Body.Close(); err != nil {
+			t.Errorf("Response.Body.Close() error = %v", err)
+		}
+		documents = append(documents, page.Documents...)
+		cursor = page.Cursor
 	}
-	if err := res.Body.Close(); err != nil {
-		t.Errorf("Response.Body.Close() error = %v", err)
-	}
-	if !slices.Equal(page.Documents, want) {
-		t.Errorf("documents = %v, want value and ID order %v", page.Documents, want)
+	if !slices.Equal(documents, want) || cursor != "" {
+		t.Errorf("documents = %v, cursor = %q, want value and ID order %v with no cursor", documents, cursor, want)
 	}
 }
 
