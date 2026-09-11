@@ -34,6 +34,29 @@ func TestStoreMetadata(t *testing.T) {
 	}
 }
 
+func TestStoreMetadataRecordValidation(t *testing.T) {
+	t.Parallel()
+
+	store := testStore(t)
+	record := readValue(t, store.db, storeMetaKey)
+	if key, err := openStoreMeta(record, testMasterKey); err != nil {
+		t.Fatalf("openStoreMeta() error = %v", err)
+	} else {
+		clear(key)
+	}
+
+	badVersion := bytes.Clone(record)
+	badVersion[0]++
+	badKeyID := bytes.Clone(record)
+	badKeyID[1]++
+	for _, value := range [][]byte{nil, record[:len(record)-1], badVersion, badKeyID} {
+		if key, err := openStoreMeta(value, testMasterKey); !errors.Is(err, errInvalidStoreKey) {
+			clear(key)
+			t.Fatalf("openStoreMeta() error = %v, want %v", err, errInvalidStoreKey)
+		}
+	}
+}
+
 func TestStoreRejectsMissingMetadata(t *testing.T) {
 	t.Parallel()
 
@@ -132,9 +155,17 @@ func TestDatabaseKeyWrapping(t *testing.T) {
 	if _, err := unwrapDBKey(wrappingKey, dbKey("other"), record); !errors.Is(err, errCorruptData) {
 		t.Fatalf("unwrapDBKey() moved-record error = %v, want %v", err, errCorruptData)
 	}
-	record[0]++
-	if _, err := unwrapDBKey(wrappingKey, key, record); !errors.Is(err, errCorruptData) {
-		t.Fatalf("unwrapDBKey() version error = %v, want %v", err, errCorruptData)
+	for i := range record {
+		corrupt := bytes.Clone(record)
+		corrupt[i] ^= 1
+		if _, err := unwrapDBKey(wrappingKey, key, corrupt); !errors.Is(err, errCorruptData) {
+			t.Fatalf("unwrapDBKey() tamper at %d error = %v, want %v", i, err, errCorruptData)
+		}
+	}
+	for _, short := range [][]byte{nil, record[:len(record)-1]} {
+		if _, err := unwrapDBKey(wrappingKey, key, short); !errors.Is(err, errCorruptData) {
+			t.Fatalf("unwrapDBKey() truncated error = %v, want %v", err, errCorruptData)
+		}
 	}
 }
 

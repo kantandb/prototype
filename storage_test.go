@@ -149,6 +149,95 @@ func TestStoreDocuments(t *testing.T) {
 	}
 }
 
+func TestStoredDocumentsAreEncrypted(t *testing.T) {
+	t.Parallel()
+
+	store := testStore(t)
+	if err := store.createDB("db"); err != nil {
+		t.Fatalf("createDB() error = %v", err)
+	}
+	id := "01950000-0000-7000-8000-000000000001"
+	body := []byte(`{"secret":"unique-plaintext-marker"}`)
+	if _, err := store.createDoc("db", id, body); err != nil {
+		t.Fatalf("createDoc() error = %v", err)
+	}
+
+	record := readValue(t, store.db, docKey("db", id))
+	if bytes.Contains(record, body) || bytes.Contains(record, []byte("unique-plaintext-marker")) {
+		t.Fatal("document record contains plaintext JSON")
+	}
+
+	databaseKey, err := store.databaseKey("db")
+	if err != nil {
+		t.Fatalf("databaseKey() error = %v", err)
+	}
+	header := record[:docRecordHeaderLen]
+	documentKey, err := deriveDocumentKey(databaseKey, id)
+	if err != nil {
+		t.Fatalf("deriveDocumentKey() error = %v", err)
+	}
+	box, err := newGCM(documentKey)
+	if err != nil {
+		t.Fatalf("newGCM() error = %v", err)
+	}
+	nonce := header[2+len(revision{})+8:]
+	compressed, err := box.Open(nil, nonce, record[docRecordHeaderLen:], recordAD(documentAD, docKey("db", id), header))
+	if err != nil {
+		t.Fatalf("box.Open() error = %v", err)
+	}
+	if bytes.Equal(compressed, body) {
+		t.Fatal("document was not compressed before encryption")
+	}
+	decoder, err := docDecoder()
+	if err != nil {
+		t.Fatalf("docDecoder() error = %v", err)
+	}
+	decoded, err := decoder.DecodeAll(compressed, make([]byte, 0, len(body)))
+	if err != nil {
+		t.Fatalf("DecodeAll() error = %v", err)
+	}
+	if !bytes.Equal(decoded, body) {
+		t.Fatal("decrypted compressed data contains wrong document")
+	}
+}
+
+func TestDocumentWritesUseFreshNonces(t *testing.T) {
+	t.Parallel()
+
+	store := testStore(t)
+	if err := store.createDB("db"); err != nil {
+		t.Fatalf("createDB() error = %v", err)
+	}
+	id := "01950000-0000-7000-8000-000000000001"
+	body := []byte(`{"same":true}`)
+	if _, err := store.createDoc("db", id, body); err != nil {
+		t.Fatalf("createDoc() error = %v", err)
+	}
+	first := readValue(t, store.db, docKey("db", id))
+
+	if _, err := store.replaceDoc("db", id, body, matchCond{}); err != nil {
+		t.Fatalf("replaceDoc() error = %v", err)
+	}
+	second := readValue(t, store.db, docKey("db", id))
+	if sameDocNonce(first, second) || bytes.Equal(first, second) {
+		t.Fatal("replaceDoc() reused nonce or ciphertext")
+	}
+
+	if _, err := store.patchDoc("db", id, matchCond{}, func([]byte) ([]byte, error) { return body, nil }); err != nil {
+		t.Fatalf("patchDoc() error = %v", err)
+	}
+	third := readValue(t, store.db, docKey("db", id))
+	if sameDocNonce(second, third) || bytes.Equal(second, third) {
+		t.Fatal("patchDoc() reused nonce or ciphertext")
+	}
+}
+
+func sameDocNonce(left, right []byte) bool {
+	offset := 2 + len(revision{}) + 8
+
+	return bytes.Equal(left[offset:docRecordHeaderLen], right[offset:docRecordHeaderLen])
+}
+
 func TestStoreListsDocuments(t *testing.T) {
 	t.Parallel()
 
