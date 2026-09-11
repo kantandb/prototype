@@ -23,6 +23,7 @@ profile.cov
 # Local build and data
 /kantan
 /data/
+*.key
 
 # Go workspace file
 go.work
