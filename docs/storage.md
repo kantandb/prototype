@@ -83,6 +83,12 @@ Index values have type tags. `null`, booleans, numbers, and strings are supporte
 
 A query scans the matching index-key range, extracts each document ID, and checks that its primary record exists. Equal values are ordered by document ID; range results are ordered by encoded value and then document ID.
 
+## JSONPath queries
+
+A QUERY request uses an existing secondary index when its singular JSONPath translates exactly to that index's JSON Pointer. Otherwise, KantanDB scans encrypted document records in ID order under a Pebble snapshot. It decrypts each record, evaluates JSONPath, and compares each selected scalar with the requested value.
+
+A scan examines at most 10,000 records per page. Its authenticated cursor records the last examined ID, including when no document matched. Indexed QUERY cursors record the encoded value and document ID. Both cursor forms bind the normalized JSONPath and selected execution order.
+
 ## How range queries work
 
 Numbers and strings are encoded so their byte order matches their value order. All values of the same type also share a key prefix:

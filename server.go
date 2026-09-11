@@ -121,6 +121,7 @@ func (a *api) handler() http.Handler {
 	router.GET("/", a.listDBs)
 	router.GET("/:database", a.listDocs)
 	router.Handle(queryMethod, "/:database", a.queryDocs)
+	router.OPTIONS("/:database", a.queryOptions)
 	router.DELETE("/:database", a.deleteDB)
 	router.POST("/:database/", a.createDoc)
 	router.GET("/:database/:id", a.getDoc)
@@ -336,6 +337,12 @@ func (a *api) listDocs(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, docList{Documents: ids, Cursor: cursor})
+}
+
+func (a *api) queryOptions(c *gin.Context) {
+	c.Header("Accept-Query", "application/json")
+	c.Header("Allow", "GET, QUERY, DELETE, OPTIONS")
+	c.Status(http.StatusNoContent)
 }
 
 func (a *api) queryDocs(c *gin.Context) {

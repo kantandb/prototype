@@ -37,6 +37,14 @@ xh GET localhost:8080/example index==email value=='"alice@example.com"' limit==1
 # Find documents whose indexed age is at least 30.
 xh GET localhost:8080/example index==age op==ge value==30 limit==100
 
+# Query any JSONPath without putting it in the URI.
+echo '{"path":"$.age","op":"ge","value":30,"limit":100}' | \
+  xh QUERY localhost:8080/example Content-Type:application/json
+
+# Continue a JSONPath query with its opaque cursor.
+echo '{"path":"$.age","op":"ge","value":30,"cursor":"eyJ..."}' | \
+  xh QUERY localhost:8080/example Content-Type:application/json
+
 # Continue an index query with its opaque cursor.
 xh GET localhost:8080/example index==age op==ge value==30 cursor==eyJ...
 
@@ -73,3 +81,9 @@ Index queries read at most one page plus one extra valid index entry. Range
 results use indexed-value order, with document ID as the tie-breaker. Equality
 results remain in document ID order. Reuse the returned cursor with the same
 database, index, operator, and value.
+
+`QUERY /{database}` accepts RFC 9535 JSONPath in a JSON body. A document matches
+when any selected scalar satisfies the comparison. A simple path that matches a
+declared index uses that index; other paths scan documents in ID order. Each
+scan page examines at most 10,000 documents and runs for at most five seconds.
+The request body is limited to 64 KiB and the path to 256 bytes.
