@@ -222,6 +222,7 @@ func validatePathText(path string) error {
 
 func safePath(path string) bool {
 	var quote byte
+	var delimiters []byte
 	escaped := false
 	descendants := 0
 	for i := range len(path) {
@@ -239,8 +240,14 @@ func safePath(path string) bool {
 		switch char {
 		case '\'', '"':
 			quote = char
+		case '[', '(':
+			delimiters = append(delimiters, char)
+		case ']', ')':
+			delimiters = delimiters[:len(delimiters)-1]
 		case ',':
-			return false
+			if delimiters[len(delimiters)-1] == '[' {
+				return false
+			}
 		case '.':
 			if i > 0 && path[i-1] == '.' {
 				descendants++

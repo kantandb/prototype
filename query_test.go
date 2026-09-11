@@ -59,12 +59,12 @@ func TestValidatePathText(t *testing.T) {
 func TestSafePath(t *testing.T) {
 	t.Parallel()
 
-	for _, path := range []string{`$..items[*].name`, `$.items[?(@.name == "a,b")]`} {
+	for _, path := range []string{`$..items[*].name`, `$.items[?(@.name == "a,b")]`, `$.items[?match(@.name, "a,b")]`} {
 		if !safePath(path) {
 			t.Errorf("safePath(%q) = false", path)
 		}
 	}
-	for _, path := range []string{`$..*..*`, `$["a","a"]`} {
+	for _, path := range []string{`$..*..*`, `$["a","a"]`, `$[?(@["a","a"])]`} {
 		if safePath(path) {
 			t.Errorf("safePath(%q) = true", path)
 		}
