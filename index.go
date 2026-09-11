@@ -509,12 +509,6 @@ func (s *store) queryRangeDocs(database, index string, op cmpOp, encoded []byte,
 	return page.ids, page.more, err
 }
 
-func (s *store) queryRangeDocsCtx(ctx context.Context, database, index string, op cmpOp, encoded []byte, limit int, cursor string) ([]string, bool, error) {
-	page, err := s.queryRangePage(ctx, database, index, op, encoded, limit, nil, cursor)
-
-	return page.ids, page.more, err
-}
-
 func (s *store) queryRangePage(ctx context.Context, database, index string, op cmpOp, encoded []byte, limit int, afterValue []byte, afterID string) (page indexPage, queryErr error) {
 	dbMu := s.dbLock(database)
 	dbMu.RLock()

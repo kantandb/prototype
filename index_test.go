@@ -489,8 +489,8 @@ func TestStoreQueryCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	if _, _, err := store.queryRangeDocsCtx(ctx, "db", "value", cmpGT, encoded, 10, ""); !errors.Is(err, context.Canceled) {
-		t.Errorf("queryRangeDocsCtx() error = %v, want %v", err, context.Canceled)
+	if _, err := store.queryRangePage(ctx, "db", "value", cmpGT, encoded, 10, nil, ""); !errors.Is(err, context.Canceled) {
+		t.Errorf("queryRangePage() error = %v, want %v", err, context.Canceled)
 	}
 	exact, err := encodeIndexValue(json.Number("1"))
 	if err != nil {
