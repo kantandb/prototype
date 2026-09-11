@@ -17,6 +17,7 @@ import (
 	"sync/atomic"
 
 	"github.com/gin-gonic/gin"
+	"github.com/theory/jsonpath"
 )
 
 type api struct {
@@ -117,6 +118,7 @@ func (a *api) handler() http.Handler {
 	router.POST("/", a.createDB)
 	router.GET("/", a.listDBs)
 	router.GET("/:database", a.listDocs)
+	router.Handle(queryMethod, "/:database", a.queryDocs)
 	router.DELETE("/:database", a.deleteDB)
 	router.POST("/:database/", a.createDoc)
 	router.GET("/:database/:id", a.getDoc)
@@ -247,6 +249,8 @@ func (a *api) listDBs(c *gin.Context) {
 }
 
 func (a *api) listDocs(c *gin.Context) {
+	c.Header("Accept-Query", "application/json")
+
 	database := c.Param("database")
 	if err := validateName(database); err != nil {
 		writeError(c, http.StatusBadRequest, "invalid_name", "Database name is invalid")
@@ -329,6 +333,83 @@ func (a *api) listDocs(c *gin.Context) {
 		cursor = ids[len(ids)-1]
 	}
 
+	c.JSON(http.StatusOK, docList{Documents: ids, Cursor: cursor})
+}
+
+func (a *api) queryDocs(c *gin.Context) {
+	c.Header("Accept-Query", "application/json")
+	c.Header("Cache-Control", "no-store")
+
+	database := c.Param("database")
+	if err := validateName(database); err != nil {
+		writeError(c, http.StatusBadRequest, "invalid_name", "Database name is invalid")
+
+		return
+	}
+	if c.Request.URL.RawQuery != "" {
+		writeError(c, http.StatusBadRequest, "invalid_query", "URI query parameters are not supported")
+
+		return
+	}
+	if !isJSON(c.GetHeader("Content-Type")) {
+		writeError(c, http.StatusUnsupportedMediaType, "unsupported_media_type", "Content-Type must be application/json")
+
+		return
+	}
+
+	body, err := readBody(c.Request.Body, a.maxBodyBytes)
+	if errors.Is(err, errBodyTooLarge) {
+		writeError(c, http.StatusRequestEntityTooLarge, "content_too_large", "Request body exceeds the size limit")
+
+		return
+	}
+	if err != nil {
+		writeError(c, http.StatusBadRequest, "invalid_request", "Could not read request body")
+
+		return
+	}
+	query, err := decodePathQuery(body)
+	if err != nil {
+		writeError(c, http.StatusBadRequest, "invalid_query", "Query body is invalid")
+
+		return
+	}
+	if query.cursor != "" && validateID(query.cursor) != nil {
+		writeError(c, http.StatusBadRequest, "invalid_cursor", "Cursor is invalid")
+
+		return
+	}
+
+	path, err := jsonpath.Parse(query.path)
+	if err != nil {
+		writeError(c, http.StatusBadRequest, "invalid_query", "Path is invalid")
+
+		return
+	}
+	ids, more, err := a.store.queryPathDocs(c.Request.Context(), database, path, query.op, query.value, query.limit, query.cursor)
+	if errors.Is(err, errDBNotFound) {
+		writeError(c, http.StatusNotFound, "database_not_found", "Database does not exist")
+
+		return
+	}
+	if errors.Is(err, errInvalidIndexValue) {
+		writeError(c, http.StatusBadRequest, "invalid_query", "Query is invalid")
+
+		return
+	}
+	if err != nil {
+		a.fail(c, "query documents", err)
+
+		return
+	}
+	if ids == nil {
+		ids = []string{}
+	}
+
+	cursor := ""
+	if more {
+		cursor = ids[len(ids)-1]
+	}
 	c.JSON(http.StatusOK, docList{Documents: ids, Cursor: cursor})
 }
 

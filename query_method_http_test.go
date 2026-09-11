@@ -1,0 +1,104 @@
+package main
+
+import (
+	"encoding/json"
+	"net/http"
+	"strings"
+	"testing"
+)
+
+func TestPathQueryHTTP(t *testing.T) {
+	t.Parallel()
+
+	server := newTestServer(t, defaultMaxBodyBytes)
+	res := sendRequest(t, server, http.MethodPost, "/", `{"name":"users"}`, "application/json")
+	checkResponse(t, res, http.StatusCreated, `{"name":"users"}`)
+
+	first := createQueryDoc(t, server, "/users/", `{"profile":{"age":29},"tags":["staff"]}`)
+	second := createQueryDoc(t, server, "/users/", `{"profile":{"age":30},"tags":["admin","staff"]}`)
+	third := createQueryDoc(t, server, "/users/", `{"profile":{"age":31}}`)
+
+	body := `{"path":"$.profile.age","op":"ge","value":30,"limit":1}`
+	res = sendRequest(t, server, queryMethod, "/users", body, "application/json; charset=utf-8")
+	if got := res.Header.Get("Accept-Query"); got != "application/json" {
+		t.Errorf("Accept-Query = %q, want application/json", got)
+	}
+	if got := res.Header.Get("Cache-Control"); got != "no-store" {
+		t.Errorf("Cache-Control = %q, want no-store", got)
+	}
+
+	var page docList
+	if err := json.NewDecoder(res.Body).Decode(&page); err != nil {
+		t.Fatalf("Decode() error = %v", err)
+	}
+	if err := res.Body.Close(); err != nil {
+		t.Errorf("Response.Body.Close() error = %v", err)
+	}
+	if len(page.Documents) != 1 || page.Documents[0] != second || page.Cursor != second {
+		t.Fatalf("first page = %+v, want %s and cursor", page, second)
+	}
+
+	body = `{"path":"$.profile.age","op":"ge","value":30,"limit":1,"cursor":"` + page.Cursor + `"}`
+	res = sendRequest(t, server, queryMethod, "/users", body, "application/json")
+	checkResponse(t, res, http.StatusOK, `{"documents":["`+third+`"],"cursor":""}`)
+
+	body = `{"path":"$.tags[*]","value":"staff"}`
+	res = sendRequest(t, server, queryMethod, "/users", body, "application/json")
+	checkResponse(t, res, http.StatusOK, `{"documents":["`+first+`","`+second+`"],"cursor":""}`)
+
+	res = sendRequest(t, server, http.MethodGet, "/users", "", "")
+	if got := res.Header.Get("Accept-Query"); got != "application/json" {
+		t.Errorf("GET Accept-Query = %q, want application/json", got)
+	}
+	if err := res.Body.Close(); err != nil {
+		t.Errorf("Response.Body.Close() error = %v", err)
+	}
+}
+
+func TestPathQueryContractHTTP(t *testing.T) {
+	t.Parallel()
+
+	server := newTestServer(t, 256)
+	res := sendRequest(t, server, http.MethodPost, "/", `{"name":"users"}`, "application/json")
+	checkResponse(t, res, http.StatusCreated, `{"name":"users"}`)
+
+	tests := []struct {
+		name        string
+		path        string
+		body        string
+		contentType string
+		status      int
+		code        string
+	}{
+		{name: "URI query", path: "/users?limit=1", body: `{"path":"$","value":null}`, contentType: "application/json", status: http.StatusBadRequest, code: "invalid_query"},
+		{name: "missing content type", path: "/users", body: `{"path":"$","value":null}`, status: http.StatusUnsupportedMediaType, code: "unsupported_media_type"},
+		{name: "wrong content type", path: "/users", body: `{"path":"$","value":null}`, contentType: "text/plain", status: http.StatusUnsupportedMediaType, code: "unsupported_media_type"},
+		{name: "empty body", path: "/users", contentType: "application/json", status: http.StatusBadRequest, code: "invalid_query"},
+		{name: "array body", path: "/users", body: `[]`, contentType: "application/json", status: http.StatusBadRequest, code: "invalid_query"},
+		{name: "missing path", path: "/users", body: `{"value":1}`, contentType: "application/json", status: http.StatusBadRequest, code: "invalid_query"},
+		{name: "missing value", path: "/users", body: `{"path":"$.age"}`, contentType: "application/json", status: http.StatusBadRequest, code: "invalid_query"},
+		{name: "unknown field", path: "/users", body: `{"path":"$.age","value":1,"extra":true}`, contentType: "application/json", status: http.StatusBadRequest, code: "invalid_query"},
+		{name: "duplicate field", path: "/users", body: `{"path":"$.age","path":"$.name","value":1}`, contentType: "application/json", status: http.StatusBadRequest, code: "invalid_query"},
+		{name: "trailing JSON", path: "/users", body: `{"path":"$.age","value":1}{}`, contentType: "application/json", status: http.StatusBadRequest, code: "invalid_query"},
+		{name: "compound value", path: "/users", body: `{"path":"$.age","value":[]}`, contentType: "application/json", status: http.StatusBadRequest, code: "invalid_query"},
+		{name: "bad operator", path: "/users", body: `{"path":"$.age","op":"ne","value":1}`, contentType: "application/json", status: http.StatusBadRequest, code: "invalid_query"},
+		{name: "ordered boolean", path: "/users", body: `{"path":"$.age","op":"gt","value":true}`, contentType: "application/json", status: http.StatusBadRequest, code: "invalid_query"},
+		{name: "bad limit", path: "/users", body: `{"path":"$.age","value":1,"limit":0}`, contentType: "application/json", status: http.StatusBadRequest, code: "invalid_query"},
+		{name: "bad cursor", path: "/users", body: `{"path":"$.age","value":1,"cursor":"bad"}`, contentType: "application/json", status: http.StatusBadRequest, code: "invalid_cursor"},
+		{name: "invalid path", path: "/users", body: `{"path":"age","value":1}`, contentType: "application/json", status: http.StatusBadRequest, code: "invalid_query"},
+		{name: "missing database", path: "/missing", body: `{"path":"$.age","value":1}`, contentType: "application/json", status: http.StatusNotFound, code: "database_not_found"},
+		{name: "body too large", path: "/users", body: strings.Repeat(" ", 257), contentType: "application/json", status: http.StatusRequestEntityTooLarge, code: "content_too_large"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			res := sendRequest(t, server, queryMethod, tt.path, tt.body, tt.contentType)
+			body := readResponse(t, res)
+			if res.StatusCode != tt.status {
+				t.Errorf("status = %d, want %d; body = %s", res.StatusCode, tt.status, body)
+			}
+			if !strings.Contains(body, `"code":"`+tt.code+`"`) {
+				t.Errorf("body = %s, want code %q", body, tt.code)
+			}
+		})
+	}
+}
