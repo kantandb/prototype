@@ -38,9 +38,10 @@ type queryPath struct {
 }
 
 type predicate struct {
-	path  queryPath
-	op    cmpOp
-	value []byte
+	path   queryPath
+	op     cmpOp
+	value  []byte
+	number *big.Rat
 }
 
 type indexDef struct {
@@ -462,7 +463,7 @@ func (s *store) queryRangeDocs(database, index string, op cmpOp, encoded []byte,
 		op:    op,
 		value: encoded,
 	}
-	if !validRangePred(pred) {
+	if !prepareRangePred(&pred) {
 		return nil, false, errInvalidIndexValue
 	}
 
@@ -525,12 +526,17 @@ func (s *store) queryRangeDocs(database, index string, op cmpOp, encoded []byte,
 	return ids, false, nil
 }
 
-func validRangePred(pred predicate) bool {
+func prepareRangePred(pred *predicate) bool {
 	if pred.path.dialect != pathJSONPointer || !pred.op.valid() || pred.op == cmpEq || !validIndexValue(pred.value) {
 		return false
 	}
+	if pred.value[0] == 0x03 {
+		pred.number, _ = new(big.Rat).SetString(string(pred.value[1:]))
 
-	return pred.value[0] == 0x03 || pred.value[0] == 0x04
+		return true
+	}
+
+	return pred.value[0] == 0x04
 }
 
 func queryDocRoot(value []byte) (map[string]any, error) {
@@ -566,11 +572,7 @@ func rangeMatch(value any, pred predicate) (bool, error) {
 		if !ok {
 			return false, errors.New("invalid document number")
 		}
-		right, ok := new(big.Rat).SetString(string(pred.value[1:]))
-		if !ok {
-			return false, errors.New("invalid query number")
-		}
-		comparison = left.Cmp(right)
+		comparison = left.Cmp(pred.number)
 	case 0x04:
 		text, ok := value.(string)
 		if !ok {
