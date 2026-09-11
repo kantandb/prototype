@@ -260,11 +260,12 @@ func (a *api) listDocs(c *gin.Context) {
 
 	var ids []string
 	var encoded []byte
+	var lastValue []byte
 	var more bool
 	var err error
 	if query.indexed {
 		var cursor string
-		encoded, cursor, err = queryStart(database, query)
+		encoded, lastValue, cursor, err = queryStart(database, query)
 		if errors.Is(err, errInvalidQueryCursor) {
 			writeError(c, http.StatusBadRequest, "invalid_cursor", "Cursor is invalid")
 
@@ -274,7 +275,8 @@ func (a *api) listDocs(c *gin.Context) {
 			if query.op == cmpEq {
 				ids, more, err = a.store.queryDocsCtx(c.Request.Context(), database, query.index, encoded, query.limit, cursor)
 			} else {
-				ids, more, err = a.store.queryRangeDocsCtx(c.Request.Context(), database, query.index, query.op, encoded, query.limit, cursor)
+				page, queryErr := a.store.queryRangePage(c.Request.Context(), database, query.index, query.op, encoded, query.limit, lastValue, cursor)
+				ids, lastValue, more, err = page.ids, page.lastValue, page.more, queryErr
 			}
 		}
 	} else {
@@ -307,7 +309,7 @@ func (a *api) listDocs(c *gin.Context) {
 
 	cursor := ""
 	if more && query.indexed {
-		cursor, err = encodeQueryCursor(queryCursor{database: database, index: query.index, op: query.op, value: encoded, id: ids[len(ids)-1]})
+		cursor, err = encodeQueryCursor(queryCursor{database: database, index: query.index, op: query.op, value: encoded, lastValue: lastValue, id: ids[len(ids)-1]})
 		if err != nil {
 			a.fail(c, "encode query cursor", err)
 
@@ -320,21 +322,21 @@ func (a *api) listDocs(c *gin.Context) {
 	c.JSON(http.StatusOK, docList{Documents: ids, Cursor: cursor})
 }
 
-func queryStart(database string, query docQuery) ([]byte, string, error) {
+func queryStart(database string, query docQuery) ([]byte, []byte, string, error) {
 	encoded, err := encodeIndexValue(query.value)
 	if err != nil {
-		return nil, "", err
+		return nil, nil, "", err
 	}
 	if query.cursor == "" {
-		return encoded, "", nil
+		return encoded, nil, "", nil
 	}
 
 	cursor, err := decodeQueryCursor(query.cursor)
 	if err != nil || cursor.database != database || cursor.index != query.index || cursor.op != query.op || !bytes.Equal(cursor.value, encoded) {
-		return nil, "", errInvalidQueryCursor
+		return nil, nil, "", errInvalidQueryCursor
 	}
 
-	return encoded, cursor.id, nil
+	return encoded, cursor.lastValue, cursor.id, nil
 }
 
 func parseDocQuery(c *gin.Context) (docQuery, bool) {

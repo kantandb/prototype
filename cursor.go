@@ -13,8 +13,8 @@ import (
 )
 
 const (
-	queryCursorVersion          = 2
-	maxQueryCursorSize          = 1 + 10 + 63 + 10 + 63 + 1 + 10 + maxEncodedIndexValue + 10 + 36
+	queryCursorVersion          = 3
+	maxQueryCursorSize          = 1 + 10 + 63 + 10 + 63 + 1 + 10 + maxEncodedIndexValue + 10 + maxEncodedIndexValue + 10 + 36
 	maxEncryptedQueryCursorSize = maxQueryCursorSize + 12 + 16
 )
 
@@ -26,15 +26,16 @@ var (
 )
 
 type queryCursor struct {
-	database string
-	index    string
-	op       cmpOp
-	value    []byte
-	id       string
+	database  string
+	index     string
+	op        cmpOp
+	value     []byte
+	lastValue []byte
+	id        string
 }
 
 func encodeQueryCursor(cursor queryCursor) (string, error) {
-	if err := validateName(cursor.database); err != nil || validateName(cursor.index) != nil || !cursor.op.valid() || !validIndexValue(cursor.value) || validateID(cursor.id) != nil {
+	if err := validateQueryCursor(cursor); err != nil {
 		return "", errInvalidQueryCursor
 	}
 
@@ -43,6 +44,7 @@ func encodeQueryCursor(cursor queryCursor) (string, error) {
 	data = appendPart(data, []byte(cursor.index))
 	data = append(data, byte(cursor.op))
 	data = appendPart(data, cursor.value)
+	data = appendPart(data, cursor.lastValue)
 	data = appendPart(data, []byte(cursor.id))
 
 	box, err := getQueryCipher()
@@ -95,17 +97,42 @@ func decodeQueryCursor(token string) (queryCursor, error) {
 	if !ok {
 		return queryCursor{}, errInvalidQueryCursor
 	}
+	lastValue, rest, ok := readPart(rest)
+	if !ok {
+		return queryCursor{}, errInvalidQueryCursor
+	}
 	id, rest, ok := readPart(rest)
 	if !ok || len(rest) != 0 {
 		return queryCursor{}, errInvalidQueryCursor
 	}
 
-	cursor := queryCursor{database: string(database), index: string(index), op: op, value: bytes.Clone(value), id: string(id)}
-	if err := validateName(cursor.database); err != nil || validateName(cursor.index) != nil || !cursor.op.valid() || !validIndexValue(cursor.value) || validateID(cursor.id) != nil {
-		return queryCursor{}, errInvalidQueryCursor
+	cursor := queryCursor{
+		database:  string(database),
+		index:     string(index),
+		op:        op,
+		value:     bytes.Clone(value),
+		lastValue: bytes.Clone(lastValue),
+		id:        string(id),
+	}
+	if err := validateQueryCursor(cursor); err != nil {
+		return queryCursor{}, err
 	}
 
 	return cursor, nil
+}
+
+func validateQueryCursor(cursor queryCursor) error {
+	if err := validateName(cursor.database); err != nil || validateName(cursor.index) != nil || !cursor.op.valid() || !validIndexValue(cursor.value) || validateID(cursor.id) != nil {
+		return errInvalidQueryCursor
+	}
+	if cursor.op == cmpEq && len(cursor.lastValue) != 0 {
+		return errInvalidQueryCursor
+	}
+	if cursor.op != cmpEq && (!validIndexValue(cursor.lastValue) || cursor.lastValue[0] != cursor.value[0]) {
+		return errInvalidQueryCursor
+	}
+
+	return nil
 }
 
 func getQueryCipher() (cipher.AEAD, error) {

@@ -406,6 +406,14 @@ func TestStoreRangeQueries(t *testing.T) {
 		t.Errorf("queryRangeDocs(boolean) error = %v, want %v", err, errInvalidIndexValue)
 	}
 
+	page, err := store.queryRangePage(context.Background(), "db", "value", cmpGE, one, 1, nil, "")
+	if err != nil {
+		t.Fatalf("queryRangePage() error = %v", err)
+	}
+	if !page.more || !slices.Equal(page.ids, []string{indexTestIDB}) {
+		t.Fatalf("queryRangePage() = %+v, want first matching document", page)
+	}
+
 	doc, err := store.getDoc("db", indexTestIDB)
 	if err != nil {
 		t.Fatalf("getDoc() error = %v", err)
@@ -413,12 +421,12 @@ func TestStoreRangeQueries(t *testing.T) {
 	if err := store.deleteDoc("db", indexTestIDB, matchCond{set: true, revision: doc.revision}); err != nil {
 		t.Fatalf("deleteDoc() error = %v", err)
 	}
-	ids, more, err = store.queryRangeDocs("db", "value", cmpGE, one, 100, "")
+	page, err = store.queryRangePage(context.Background(), "db", "value", cmpGE, one, 100, page.lastValue, indexTestIDB)
 	if err != nil {
-		t.Fatalf("queryRangeDocs(deleted) error = %v", err)
+		t.Fatalf("queryRangePage(deleted cursor entry) error = %v", err)
 	}
-	if more || !slices.Equal(ids, []string{indexTestIDC}) {
-		t.Errorf("queryRangeDocs(deleted) = %v, %t, want [%s], false", ids, more, indexTestIDC)
+	if page.more || !slices.Equal(page.ids, []string{indexTestIDC}) {
+		t.Errorf("queryRangePage(deleted cursor entry) = %+v, want [%s]", page, indexTestIDC)
 	}
 }
 

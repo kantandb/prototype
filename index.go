@@ -519,31 +519,48 @@ func (s *store) queryDocsCtx(ctx context.Context, database, index string, encode
 	return ids, false, nil
 }
 
-func (s *store) queryRangeDocs(database, index string, op cmpOp, encoded []byte, limit int, cursor string) ([]string, bool, error) {
-	return s.queryRangeDocsCtx(context.Background(), database, index, op, encoded, limit, cursor)
+type indexPage struct {
+	ids       []string
+	lastValue []byte
+	more      bool
 }
 
-func (s *store) queryRangeDocsCtx(ctx context.Context, database, index string, op cmpOp, encoded []byte, limit int, cursor string) (ids []string, more bool, queryErr error) {
+func (s *store) queryRangeDocs(database, index string, op cmpOp, encoded []byte, limit int, cursor string) ([]string, bool, error) {
+	page, err := s.queryRangePage(context.Background(), database, index, op, encoded, limit, nil, cursor)
+
+	return page.ids, page.more, err
+}
+
+func (s *store) queryRangeDocsCtx(ctx context.Context, database, index string, op cmpOp, encoded []byte, limit int, cursor string) ([]string, bool, error) {
+	page, err := s.queryRangePage(ctx, database, index, op, encoded, limit, nil, cursor)
+
+	return page.ids, page.more, err
+}
+
+func (s *store) queryRangePage(ctx context.Context, database, index string, op cmpOp, encoded []byte, limit int, afterValue []byte, afterID string) (page indexPage, queryErr error) {
 	dbMu := s.dbLock(database)
 	dbMu.RLock()
 	defer dbMu.RUnlock()
 
 	exists, err := s.hasDB(database)
 	if err != nil {
-		return nil, false, fmt.Errorf("checking database: %w", err)
+		return indexPage{}, fmt.Errorf("checking database: %w", err)
 	}
 	if !exists {
-		return nil, false, errDBNotFound
+		return indexPage{}, errDBNotFound
 	}
 	defs, err := s.indexes(database)
 	if err != nil {
-		return nil, false, err
+		return indexPage{}, err
 	}
 	if _, ok := findIndex(defs, index); !ok {
-		return nil, false, errIndexNotFound
+		return indexPage{}, errIndexNotFound
 	}
 	if !op.valid() || op == cmpEq || !validIndexValue(encoded) || encoded[0] != 0x03 && encoded[0] != 0x04 {
-		return nil, false, errInvalidIndexValue
+		return indexPage{}, errInvalidIndexValue
+	}
+	if len(afterValue) > 0 && (!validIndexValue(afterValue) || afterValue[0] != encoded[0] || validateID(afterID) != nil) {
+		return indexPage{}, errInvalidQueryCursor
 	}
 
 	typePrefix := indexTypePrefix(database, index, encoded[0])
@@ -569,7 +586,7 @@ func (s *store) queryRangeDocsCtx(ctx context.Context, database, index string, o
 
 	iter, err := snapshot.NewIter(&options)
 	if err != nil {
-		return nil, false, wrapStore("creating range query iterator", err)
+		return indexPage{}, wrapStore("creating range query iterator", err)
 	}
 	defer func() {
 		if err := iter.Close(); err != nil {
@@ -577,37 +594,50 @@ func (s *store) queryRangeDocsCtx(ctx context.Context, database, index string, o
 		}
 	}()
 
-	pastCursor := cursor == ""
-	for valid := iter.First(); valid && len(ids) <= limit; valid = iter.Next() {
+	valid := iter.First()
+	pastCursor := afterID == ""
+	if len(afterValue) > 0 {
+		key := indexKey(database, index, afterValue, afterID)
+		valid = iter.SeekGE(key)
+		if valid && bytes.Equal(iter.Key(), key) {
+			valid = iter.Next()
+		}
+		pastCursor = true
+	}
+	var values [][]byte
+	for ; valid && len(page.ids) <= limit; valid = iter.Next() {
 		if err := ctx.Err(); err != nil {
-			return nil, false, err
+			return indexPage{}, err
 		}
 
-		_, id, ok := splitIndexEntry(typePrefix, iter.Key())
+		value, id, ok := splitIndexEntry(typePrefix, iter.Key())
 		if !ok || len(iter.Value()) != 0 || validateID(id) != nil {
-			return nil, false, fmt.Errorf("%w: invalid index entry", errCorruptData)
+			return indexPage{}, fmt.Errorf("%w: invalid index entry", errCorruptData)
 		}
 		if !pastCursor {
-			pastCursor = id == cursor
+			pastCursor = id == afterID
 			continue
 		}
 		exists, err := snapshotHas(snapshot, docKey(database, id))
 		if err != nil {
-			return nil, false, err
+			return indexPage{}, err
 		}
 		if !exists {
-			return nil, false, fmt.Errorf("%w: index references missing document", errCorruptData)
+			return indexPage{}, fmt.Errorf("%w: index references missing document", errCorruptData)
 		}
-		ids = append(ids, id)
+		page.ids = append(page.ids, id)
+		values = append(values, value)
 	}
 	if err := iter.Error(); err != nil {
-		return nil, false, wrapStore("iterating range query", err)
+		return indexPage{}, wrapStore("iterating range query", err)
 	}
-	if len(ids) > limit {
-		return ids[:limit], true, nil
+	if len(page.ids) > limit {
+		page.ids = page.ids[:limit]
+		page.lastValue = values[limit-1]
+		page.more = true
 	}
 
-	return ids, false, nil
+	return page, nil
 }
 
 func splitIndexEntry(prefix, key []byte) ([]byte, string, bool) {

@@ -17,7 +17,7 @@ func TestQueryCursorRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("encodeIndexValue() error = %v", err)
 	}
-	want := queryCursor{database: "users", index: "email", op: cmpGE, value: value, id: testCursorID}
+	want := queryCursor{database: "users", index: "email", op: cmpGE, value: value, lastValue: value, id: testCursorID}
 
 	token, err := encodeQueryCursor(want)
 	if err != nil {
@@ -38,7 +38,7 @@ func TestQueryCursorRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("decodeQueryCursor() error = %v", err)
 	}
-	if got.database != want.database || got.index != want.index || got.op != want.op || !bytes.Equal(got.value, want.value) || got.id != want.id {
+	if got.database != want.database || got.index != want.index || got.op != want.op || !bytes.Equal(got.value, want.value) || !bytes.Equal(got.lastValue, want.lastValue) || got.id != want.id {
 		t.Errorf("decodeQueryCursor() = %+v, want %+v", got, want)
 	}
 }
@@ -50,13 +50,13 @@ func TestQueryCursorOperatorMatch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("encodeIndexValue() error = %v", err)
 	}
-	token, err := encodeQueryCursor(queryCursor{database: "users", index: "email", op: cmpLT, value: value, id: testCursorID})
+	token, err := encodeQueryCursor(queryCursor{database: "users", index: "email", op: cmpLT, value: value, lastValue: value, id: testCursorID})
 	if err != nil {
 		t.Fatalf("encodeQueryCursor() error = %v", err)
 	}
 
 	query := docQuery{index: "email", op: cmpGE, value: "alice@example.com", cursor: token}
-	if _, _, err := queryStart("users", query); !errors.Is(err, errInvalidQueryCursor) {
+	if _, _, _, err := queryStart("users", query); !errors.Is(err, errInvalidQueryCursor) {
 		t.Errorf("queryStart() error = %v, want %v", err, errInvalidQueryCursor)
 	}
 }
@@ -83,23 +83,25 @@ func TestQueryCursorTampering(t *testing.T) {
 func TestQueryCursorValidation(t *testing.T) {
 	t.Parallel()
 
-	data := func(version byte, database, index string, op byte, value []byte, id string, tail []byte) []byte {
+	data := func(version byte, database, index string, op byte, value, lastValue []byte, id string, tail []byte) []byte {
 		encoded := []byte{version}
 		encoded = appendPart(encoded, []byte(database))
 		encoded = appendPart(encoded, []byte(index))
 		encoded = append(encoded, op)
 		encoded = appendPart(encoded, value)
+		encoded = appendPart(encoded, lastValue)
 		encoded = appendPart(encoded, []byte(id))
 
 		return append(encoded, tail...)
 	}
-	token := func(version byte, database, index string, op byte, value []byte, id string, tail []byte) string {
-		return sealQueryCursor(t, data(version, database, index, op, value, id, tail))
+	token := func(version byte, database, index string, op byte, value, lastValue []byte, id string, tail []byte) string {
+		return sealQueryCursor(t, data(version, database, index, op, value, lastValue, id, tail))
 	}
 
 	old := []byte{queryCursorVersion - 1}
 	old = appendPart(old, []byte("users"))
 	old = appendPart(old, []byte("email"))
+	old = append(old, byte(cmpEq))
 	old = appendPart(old, []byte{0x00})
 	old = appendPart(old, []byte(testCursorID))
 
@@ -110,15 +112,18 @@ func TestQueryCursorValidation(t *testing.T) {
 		{name: "empty"},
 		{name: "invalid base64", token: "!"},
 		{name: "truncated", token: base64.RawURLEncoding.EncodeToString([]byte{queryCursorVersion})},
-		{name: "fabricated", token: base64.RawURLEncoding.EncodeToString(data(queryCursorVersion, "users", "email", byte(cmpEq), []byte{0x00}, testCursorID, nil))},
+		{name: "fabricated", token: base64.RawURLEncoding.EncodeToString(data(queryCursorVersion, "users", "email", byte(cmpEq), []byte{0x00}, nil, testCursorID, nil))},
 		{name: "old version", token: sealQueryCursor(t, old)},
-		{name: "unsupported version", token: token(queryCursorVersion+1, "users", "email", byte(cmpEq), []byte{0x00}, testCursorID, nil)},
-		{name: "unknown operator", token: token(queryCursorVersion, "users", "email", 0xff, []byte{0x00}, testCursorID, nil)},
-		{name: "invalid database", token: token(queryCursorVersion, "Bad", "email", byte(cmpEq), []byte{0x00}, testCursorID, nil)},
-		{name: "invalid index", token: token(queryCursorVersion, "users", "Bad", byte(cmpEq), []byte{0x00}, testCursorID, nil)},
-		{name: "invalid value", token: token(queryCursorVersion, "users", "email", byte(cmpEq), []byte{0xff}, testCursorID, nil)},
-		{name: "invalid id", token: token(queryCursorVersion, "users", "email", byte(cmpEq), []byte{0x00}, "bad", nil)},
-		{name: "trailing data", token: token(queryCursorVersion, "users", "email", byte(cmpEq), []byte{0x00}, testCursorID, []byte{0})},
+		{name: "unsupported version", token: token(queryCursorVersion+1, "users", "email", byte(cmpEq), []byte{0x00}, nil, testCursorID, nil)},
+		{name: "unknown operator", token: token(queryCursorVersion, "users", "email", 0xff, []byte{0x00}, nil, testCursorID, nil)},
+		{name: "invalid database", token: token(queryCursorVersion, "Bad", "email", byte(cmpEq), []byte{0x00}, nil, testCursorID, nil)},
+		{name: "invalid index", token: token(queryCursorVersion, "users", "Bad", byte(cmpEq), []byte{0x00}, nil, testCursorID, nil)},
+		{name: "invalid value", token: token(queryCursorVersion, "users", "email", byte(cmpEq), []byte{0xff}, nil, testCursorID, nil)},
+		{name: "equality last value", token: token(queryCursorVersion, "users", "email", byte(cmpEq), []byte{0x00}, []byte{0x00}, testCursorID, nil)},
+		{name: "missing range last value", token: token(queryCursorVersion, "users", "email", byte(cmpGE), valueForCursor(t, "a"), nil, testCursorID, nil)},
+		{name: "range last value type", token: token(queryCursorVersion, "users", "email", byte(cmpGE), valueForCursor(t, "a"), valueForCursor(t, 1), testCursorID, nil)},
+		{name: "invalid id", token: token(queryCursorVersion, "users", "email", byte(cmpEq), []byte{0x00}, nil, "bad", nil)},
+		{name: "trailing data", token: token(queryCursorVersion, "users", "email", byte(cmpEq), []byte{0x00}, nil, testCursorID, []byte{0})},
 		{name: "oversized", token: strings.Repeat("a", base64.RawURLEncoding.EncodedLen(maxEncryptedQueryCursorSize)+1)},
 	}
 	for _, tt := range tests {
@@ -130,6 +135,17 @@ func TestQueryCursorValidation(t *testing.T) {
 			}
 		})
 	}
+}
+
+func valueForCursor(t *testing.T, value any) []byte {
+	t.Helper()
+
+	encoded, err := encodeIndexValue(value)
+	if err != nil {
+		t.Fatalf("encodeIndexValue() error = %v", err)
+	}
+
+	return encoded
 }
 
 func sealQueryCursor(t *testing.T, data []byte) string {
