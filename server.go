@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"crypto/cipher"
 	"encoding/json"
 	"errors"
@@ -15,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"sync/atomic"
+	"time"
 
 	"github.com/gin-gonic/gin"
 )
@@ -105,6 +107,7 @@ func newAPI(store *store, maxBodyBytes int64, log *slog.Logger) *api {
 const (
 	defaultListLimit = 100
 	maxListLimit     = 1000
+	queryTimeout     = 5 * time.Second
 )
 
 func (a *api) handler() http.Handler {
@@ -356,7 +359,7 @@ func (a *api) queryDocs(c *gin.Context) {
 		return
 	}
 
-	body, err := readBody(c.Request.Body, a.maxBodyBytes)
+	body, err := readBody(c.Request.Body, min(a.maxBodyBytes, int64(maxQueryBody)))
 	if errors.Is(err, errBodyTooLarge) {
 		writeError(c, http.StatusRequestEntityTooLarge, "content_too_large", "Request body exceeds the size limit")
 
@@ -381,42 +384,12 @@ func (a *api) queryDocs(c *gin.Context) {
 	}
 
 	var ids []string
-	var more bool
 	var cursor string
-	if err == nil && plan.index != "" {
-		key, keyErr := a.store.cursorKey(database)
-		if keyErr != nil {
-			err = keyErr
-		} else {
-			var box cipher.AEAD
-			box, err = newQueryCipher(key)
-			if err == nil {
-				indexed := docQuery{value: query.value, cursor: query.cursor, index: plan.index, op: query.op, limit: query.limit, indexed: true}
-				var encoded, lastValue []byte
-				var afterID string
-				encoded, lastValue, afterID, err = queryStart(box, database, indexed)
-				if err == nil && query.op == cmpEq {
-					ids, more, err = a.store.queryDocsCtx(c.Request.Context(), database, plan.index, encoded, query.limit, afterID)
-				} else if err == nil {
-					var page indexPage
-					page, err = a.store.queryRangePage(c.Request.Context(), database, plan.index, query.op, encoded, query.limit, lastValue, afterID)
-					ids, lastValue, more = page.ids, page.lastValue, page.more
-				}
-				if err == nil && more {
-					cursor, err = encodeQueryCursor(box, queryCursor{database: database, index: plan.index, op: query.op, value: encoded, lastValue: lastValue, id: ids[len(ids)-1]})
-				}
-			}
-		}
-	} else if err == nil {
-		if query.cursor != "" && validateID(query.cursor) != nil {
-			writeError(c, http.StatusBadRequest, "invalid_cursor", "Cursor is invalid")
+	if err == nil {
+		ctx, cancel := context.WithTimeout(c.Request.Context(), queryTimeout)
+		defer cancel()
 
-			return
-		}
-		ids, more, err = a.store.queryPathDocs(c.Request.Context(), database, plan.path, query.op, query.value, query.limit, query.cursor)
-		if more {
-			cursor = ids[len(ids)-1]
-		}
+		ids, cursor, err = a.store.executePathQuery(ctx, database, plan, query)
 	}
 	if errors.Is(err, errInvalidQueryCursor) {
 		writeError(c, http.StatusBadRequest, "invalid_cursor", "Cursor is invalid")
@@ -430,6 +403,11 @@ func (a *api) queryDocs(c *gin.Context) {
 	}
 	if errors.Is(err, errInvalidIndexValue) {
 		writeError(c, http.StatusBadRequest, "invalid_query", "Query is invalid")
+
+		return
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		writeError(c, http.StatusServiceUnavailable, "query_timeout", "Query exceeded the execution limit")
 
 		return
 	}

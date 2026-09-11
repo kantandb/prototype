@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"net/http"
+	"net/url"
 	"strings"
 	"testing"
 )
@@ -34,8 +35,8 @@ func TestPathQueryHTTP(t *testing.T) {
 	if err := res.Body.Close(); err != nil {
 		t.Errorf("Response.Body.Close() error = %v", err)
 	}
-	if len(page.Documents) != 1 || page.Documents[0] != second || page.Cursor != second {
-		t.Fatalf("first page = %+v, want %s and cursor", page, second)
+	if len(page.Documents) != 1 || page.Documents[0] != second || page.Cursor == "" || page.Cursor == second {
+		t.Fatalf("first page = %+v, want %s and opaque cursor", page, second)
 	}
 
 	body = `{"path":"$.profile.age","op":"ge","value":30,"limit":1,"cursor":"` + page.Cursor + `"}`
@@ -78,9 +79,37 @@ func TestPathQueryUsesIndexHTTP(t *testing.T) {
 		t.Fatalf("first page = %+v, want indexed value order and opaque cursor", first)
 	}
 
+	for _, body := range []string{
+		`{"path":"$.other","op":"ge","value":10,"limit":1,"cursor":"` + first.Cursor + `"}`,
+		`{"path":"$.score","op":"gt","value":10,"limit":1,"cursor":"` + first.Cursor + `"}`,
+		`{"path":"$.score","op":"ge","value":11,"limit":1,"cursor":"` + first.Cursor + `"}`,
+	} {
+		res = sendRequest(t, server, queryMethod, "/scores", body, "application/json")
+		checkResponse(t, res, http.StatusBadRequest, `{"error":{"code":"invalid_cursor","message":"Cursor is invalid"}}`)
+	}
+
+	res = sendRequest(t, server, http.MethodGet, "/scores?index=score&op=ge&value=10&cursor="+url.QueryEscape(first.Cursor), "", "")
+	checkResponse(t, res, http.StatusBadRequest, `{"error":{"code":"invalid_cursor","message":"Cursor is invalid"}}`)
+
 	body = `{"path":"$['score']","op":"ge","value":10,"limit":1,"cursor":"` + first.Cursor + `"}`
 	res = sendRequest(t, server, queryMethod, "/scores", body, "application/json")
 	checkResponse(t, res, http.StatusOK, `{"documents":["`+twenty+`"],"cursor":""}`)
+}
+
+func TestPathQueryLimitsHTTP(t *testing.T) {
+	t.Parallel()
+
+	server := newTestServer(t, defaultMaxBodyBytes)
+	res := sendRequest(t, server, http.MethodPost, "/", `{"name":"users"}`, "application/json")
+	checkResponse(t, res, http.StatusCreated, `{"name":"users"}`)
+
+	body := `{"path":"$` + strings.Repeat(".a", maxQueryPath) + `","value":1}`
+	res = sendRequest(t, server, queryMethod, "/users", body, "application/json")
+	checkResponse(t, res, http.StatusBadRequest, `{"error":{"code":"invalid_query","message":"Path is invalid"}}`)
+
+	body = `{"path":"$","value":null}` + strings.Repeat(" ", maxQueryBody)
+	res = sendRequest(t, server, queryMethod, "/users", body, "application/json")
+	checkResponse(t, res, http.StatusRequestEntityTooLarge, `{"error":{"code":"content_too_large","message":"Request body exceeds the size limit"}}`)
 }
 
 func TestPathQueryContractHTTP(t *testing.T) {
