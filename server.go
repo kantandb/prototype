@@ -272,9 +272,9 @@ func (a *api) listDocs(c *gin.Context) {
 		}
 		if err == nil {
 			if query.op == cmpEq {
-				ids, more, err = a.store.queryDocs(database, query.index, encoded, query.limit, cursor)
+				ids, more, err = a.store.queryDocsCtx(c.Request.Context(), database, query.index, encoded, query.limit, cursor)
 			} else {
-				ids, more, err = a.store.queryRangeDocs(database, query.index, query.op, encoded, query.limit, cursor)
+				ids, more, err = a.store.queryRangeDocsCtx(c.Request.Context(), database, query.index, query.op, encoded, query.limit, cursor)
 			}
 		}
 	} else {

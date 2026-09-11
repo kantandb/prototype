@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"math/big"
@@ -379,21 +380,21 @@ func TestStoreRangeQueries(t *testing.T) {
 	if err != nil {
 		t.Fatalf("encodeIndexValue() error = %v", err)
 	}
-	ids, more, err := store.queryRangeDocs("db", "value", cmpGE, one, 1, indexTestIDA)
+	ids, more, err := store.queryRangeDocs("db", "value", cmpGE, one, 1, "")
 	if err != nil {
-		t.Fatalf("queryRangeDocs(cursor) error = %v", err)
+		t.Fatalf("queryRangeDocs(first page) error = %v", err)
 	}
 	if !more || !slices.Equal(ids, []string{indexTestIDB}) {
-		t.Errorf("queryRangeDocs(cursor) = %v, %t, want [%s], true", ids, more, indexTestIDB)
+		t.Errorf("queryRangeDocs(first page) = %v, %t, want [%s], true", ids, more, indexTestIDB)
 	}
 	ids, more, err = store.queryRangeDocs("db", "value", cmpGE, one, 1, indexTestIDB)
 	if err != nil {
-		t.Fatalf("queryRangeDocs(next cursor) error = %v", err)
+		t.Fatalf("queryRangeDocs(cursor) error = %v", err)
 	}
 	if more || !slices.Equal(ids, []string{indexTestIDC}) {
-		t.Errorf("queryRangeDocs(next cursor) = %v, %t, want [%s], false", ids, more, indexTestIDC)
+		t.Errorf("queryRangeDocs(cursor) = %v, %t, want [%s], false", ids, more, indexTestIDC)
 	}
-	ids, more, err = store.queryRangeDocs("db", "value", cmpGE, one, 1, indexTestIDZ)
+	ids, more, err = store.queryRangeDocs("db", "value", cmpGE, one, 1, indexTestIDC)
 	if err != nil {
 		t.Fatalf("queryRangeDocs(final cursor) error = %v", err)
 	}
@@ -428,48 +429,57 @@ func TestStoreRangeQueryCorruption(t *testing.T) {
 	if err := store.createDB("db", indexDef{name: "value", path: "/value"}); err != nil {
 		t.Fatalf("createDB() error = %v", err)
 	}
-	encoded, err := encodeIndexValue(json.Number("0"))
+	encoded, err := encodeIndexValue(json.Number("1"))
 	if err != nil {
 		t.Fatalf("encodeIndexValue() error = %v", err)
 	}
 
-	if err := store.db.Set(docKey("db", indexTestIDA), []byte{0xff}, pebble.Sync); err != nil {
-		t.Fatalf("Set(document) error = %v", err)
+	entry := indexKey("db", "value", encoded, "bad")
+	if err := store.db.Set(entry, nil, pebble.Sync); err != nil {
+		t.Fatalf("Set(index entry) error = %v", err)
 	}
-	if _, _, err := store.queryRangeDocs("db", "value", cmpGT, encoded, 10, ""); !errors.Is(err, errCorruptData) {
-		t.Errorf("queryRangeDocs(document) error = %v, want %v", err, errCorruptData)
+	if _, _, err := store.queryRangeDocs("db", "value", cmpGE, encoded, 10, ""); !errors.Is(err, errCorruptData) {
+		t.Errorf("queryRangeDocs(index entry) error = %v, want %v", err, errCorruptData)
 	}
-	if err := store.db.Delete(docKey("db", indexTestIDA), pebble.Sync); err != nil {
-		t.Fatalf("Delete(document) error = %v", err)
-	}
-
-	body, err := json.Marshal(map[string]string{"value": strings.Repeat("x", maxIndexValue)})
-	if err != nil {
-		t.Fatalf("json.Marshal() error = %v", err)
-	}
-	if err := store.db.Set(docKey("db", indexTestIDA), encodeDoc(body, revision{}), pebble.Sync); err != nil {
-		t.Fatalf("Set(oversized indexed value) error = %v", err)
-	}
-	if _, _, err := store.queryRangeDocs("db", "value", cmpGT, encoded, 10, ""); !errors.Is(err, errCorruptData) {
-		t.Errorf("queryRangeDocs(oversized indexed value) error = %v, want %v", err, errCorruptData)
-	}
-	if err := store.db.Delete(docKey("db", indexTestIDA), pebble.Sync); err != nil {
-		t.Fatalf("Delete(oversized indexed value) error = %v", err)
+	if err := store.db.Delete(entry, pebble.Sync); err != nil {
+		t.Fatalf("Delete(index entry) error = %v", err)
 	}
 
-	value := encodeDoc([]byte(`{"value":1}`), revision{})
-	if err := store.db.Set(docKey("db", "bad"), value, pebble.Sync); err != nil {
-		t.Fatalf("Set(document ID) error = %v", err)
+	entry = indexKey("db", "value", encoded, indexTestIDA)
+	if err := store.db.Set(entry, nil, pebble.Sync); err != nil {
+		t.Fatalf("Set(missing document entry) error = %v", err)
 	}
-	if _, _, err := store.queryRangeDocs("db", "value", cmpGT, encoded, 10, ""); !errors.Is(err, errCorruptData) {
-		t.Errorf("queryRangeDocs(document ID) error = %v, want %v", err, errCorruptData)
+	if _, _, err := store.queryRangeDocs("db", "value", cmpGE, encoded, 10, ""); !errors.Is(err, errCorruptData) {
+		t.Errorf("queryRangeDocs(missing document) error = %v, want %v", err, errCorruptData)
 	}
 
 	if err := store.db.Set(indexDefKey("db", "bad"), []byte{0xff}, pebble.Sync); err != nil {
 		t.Fatalf("Set(index definition) error = %v", err)
 	}
-	if _, _, err := store.queryRangeDocs("db", "value", cmpGT, encoded, 10, ""); !errors.Is(err, errCorruptData) {
+	if _, _, err := store.queryRangeDocs("db", "value", cmpGE, encoded, 10, ""); !errors.Is(err, errCorruptData) {
 		t.Errorf("queryRangeDocs(index definition) error = %v, want %v", err, errCorruptData)
+	}
+}
+
+func TestStoreQueryCancellation(t *testing.T) {
+	t.Parallel()
+
+	store := testStore(t)
+	if err := store.createDB("db", indexDef{name: "value", path: "/value"}); err != nil {
+		t.Fatalf("createDB() error = %v", err)
+	}
+	if _, err := store.createDoc("db", indexTestIDA, []byte(`{"value":1}`)); err != nil {
+		t.Fatalf("createDoc() error = %v", err)
+	}
+	encoded, err := encodeIndexValue(json.Number("0"))
+	if err != nil {
+		t.Fatalf("encodeIndexValue() error = %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	if _, _, err := store.queryRangeDocsCtx(ctx, "db", "value", cmpGT, encoded, 10, ""); !errors.Is(err, context.Canceled) {
+		t.Errorf("queryRangeDocsCtx() error = %v, want %v", err, context.Canceled)
 	}
 }
 

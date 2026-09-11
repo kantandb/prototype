@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
@@ -39,10 +40,9 @@ type queryPath struct {
 }
 
 type predicate struct {
-	path   queryPath
-	op     cmpOp
-	value  []byte
-	number *big.Rat
+	path  queryPath
+	op    cmpOp
+	value []byte
 }
 
 type indexDef struct {
@@ -202,7 +202,6 @@ func encodeSortableNumber(number *big.Rat) []byte {
 	}
 
 	magnitude := new(big.Rat).Abs(number)
-	digits := magnitude.Num().String()
 	denominator := new(big.Int).Set(magnitude.Denom())
 	twos, fives := 0, 0
 	for denominator.Bit(0) == 0 {
@@ -226,7 +225,7 @@ func encodeSortableNumber(number *big.Rat) []byte {
 	if fives < scale {
 		coefficient.Mul(coefficient, new(big.Int).Exp(five, big.NewInt(int64(scale-fives)), nil))
 	}
-	digits = coefficient.String()
+	digits := coefficient.String()
 	for digits[len(digits)-1] == '0' {
 		digits = digits[:len(digits)-1]
 		scale--
@@ -430,7 +429,11 @@ func deleteIndexEntries(batch *pebble.Batch, database, id string, values map[str
 	return nil
 }
 
-func (s *store) queryDocs(database, index string, encoded []byte, limit int, cursor string) (ids []string, more bool, queryErr error) {
+func (s *store) queryDocs(database, index string, encoded []byte, limit int, cursor string) ([]string, bool, error) {
+	return s.queryDocsCtx(context.Background(), database, index, encoded, limit, cursor)
+}
+
+func (s *store) queryDocsCtx(ctx context.Context, database, index string, encoded []byte, limit int, cursor string) (ids []string, more bool, queryErr error) {
 	dbMu := s.dbLock(database)
 	dbMu.RLock()
 	defer dbMu.RUnlock()
@@ -488,6 +491,10 @@ func (s *store) queryDocs(database, index string, encoded []byte, limit int, cur
 	}
 
 	for ; valid && len(ids) <= limit; valid = iter.Next() {
+		if err := ctx.Err(); err != nil {
+			return nil, false, err
+		}
+
 		id := string(iter.Key()[len(prefix):])
 		if len(iter.Value()) != 0 || validateID(id) != nil {
 			return nil, false, fmt.Errorf("%w: invalid index entry", errCorruptData)
@@ -512,7 +519,11 @@ func (s *store) queryDocs(database, index string, encoded []byte, limit int, cur
 	return ids, false, nil
 }
 
-func (s *store) queryRangeDocs(database, index string, op cmpOp, encoded []byte, limit int, cursor string) (ids []string, more bool, queryErr error) {
+func (s *store) queryRangeDocs(database, index string, op cmpOp, encoded []byte, limit int, cursor string) ([]string, bool, error) {
+	return s.queryRangeDocsCtx(context.Background(), database, index, op, encoded, limit, cursor)
+}
+
+func (s *store) queryRangeDocsCtx(ctx context.Context, database, index string, op cmpOp, encoded []byte, limit int, cursor string) (ids []string, more bool, queryErr error) {
 	dbMu := s.dbLock(database)
 	dbMu.RLock()
 	defer dbMu.RUnlock()
@@ -524,26 +535,31 @@ func (s *store) queryRangeDocs(database, index string, op cmpOp, encoded []byte,
 	if !exists {
 		return nil, false, errDBNotFound
 	}
-
 	defs, err := s.indexes(database)
 	if err != nil {
 		return nil, false, err
 	}
-	def, ok := findIndex(defs, index)
-	if !ok {
+	if _, ok := findIndex(defs, index); !ok {
 		return nil, false, errIndexNotFound
 	}
-
-	pred := predicate{
-		path:  queryPath{dialect: pathJSONPointer, value: def.path},
-		op:    op,
-		value: encoded,
-	}
-	if !prepareRangePred(&pred) {
+	if !op.valid() || op == cmpEq || !validIndexValue(encoded) || encoded[0] != 0x03 && encoded[0] != 0x04 {
 		return nil, false, errInvalidIndexValue
 	}
 
-	prefix := docsPrefix(database)
+	typePrefix := indexTypePrefix(database, index, encoded[0])
+	options := pebble.IterOptions{LowerBound: typePrefix, UpperBound: prefixEnd(typePrefix)}
+	boundary := indexValuePrefix(database, index, encoded)
+	switch op {
+	case cmpLT:
+		options.UpperBound = boundary
+	case cmpLE:
+		options.UpperBound = prefixEnd(boundary)
+	case cmpGT:
+		options.LowerBound = prefixEnd(boundary)
+	case cmpGE:
+		options.LowerBound = boundary
+	}
+
 	snapshot := s.db.NewSnapshot()
 	defer func() {
 		if err := snapshot.Close(); err != nil {
@@ -551,7 +567,7 @@ func (s *store) queryRangeDocs(database, index string, op cmpOp, encoded []byte,
 		}
 	}()
 
-	iter, err := snapshot.NewIter(&pebble.IterOptions{LowerBound: prefix, UpperBound: prefixEnd(prefix)})
+	iter, err := snapshot.NewIter(&options)
 	if err != nil {
 		return nil, false, wrapStore("creating range query iterator", err)
 	}
@@ -561,36 +577,28 @@ func (s *store) queryRangeDocs(database, index string, op cmpOp, encoded []byte,
 		}
 	}()
 
-	valid := iter.First()
-	if cursor != "" {
-		key := docKey(database, cursor)
-		valid = iter.SeekGE(key)
-		if valid && bytes.Equal(iter.Key(), key) {
-			valid = iter.Next()
-		}
-	}
-
-	for ; valid && len(ids) <= limit; valid = iter.Next() {
-		id := string(iter.Key()[len(prefix):])
-		if validateID(id) != nil {
-			return nil, false, fmt.Errorf("%w: invalid document ID", errCorruptData)
+	pastCursor := cursor == ""
+	for valid := iter.First(); valid && len(ids) <= limit; valid = iter.Next() {
+		if err := ctx.Err(); err != nil {
+			return nil, false, err
 		}
 
-		root, err := queryDocRoot(iter.Value())
-		if err != nil {
-			return nil, false, fmt.Errorf("%w: document %q: %v", errCorruptData, id, err)
+		_, id, ok := splitIndexEntry(typePrefix, iter.Key())
+		if !ok || len(iter.Value()) != 0 || validateID(id) != nil {
+			return nil, false, fmt.Errorf("%w: invalid index entry", errCorruptData)
 		}
-		value, ok := pointerValue(root, pred.path.value)
-		if !ok {
+		if !pastCursor {
+			pastCursor = id == cursor
 			continue
 		}
-		match, err := rangeMatch(value, pred)
+		exists, err := snapshotHas(snapshot, docKey(database, id))
 		if err != nil {
-			return nil, false, fmt.Errorf("%w: document %q: %v", errCorruptData, id, err)
+			return nil, false, err
 		}
-		if match {
-			ids = append(ids, id)
+		if !exists {
+			return nil, false, fmt.Errorf("%w: index references missing document", errCorruptData)
 		}
+		ids = append(ids, id)
 	}
 	if err := iter.Error(); err != nil {
 		return nil, false, wrapStore("iterating range query", err)
@@ -602,117 +610,62 @@ func (s *store) queryRangeDocs(database, index string, op cmpOp, encoded []byte,
 	return ids, false, nil
 }
 
-func prepareRangePred(pred *predicate) bool {
-	if pred.path.dialect != pathJSONPointer || !pred.op.valid() || pred.op == cmpEq || !validIndexValue(pred.value) {
-		return false
-	}
-	if pred.value[0] == 0x03 {
-		pred.number = decodeSortableNumber(pred.value[1:])
-
-		return pred.number != nil
+func splitIndexEntry(prefix, key []byte) ([]byte, string, bool) {
+	if !bytes.HasPrefix(key, prefix) || len(prefix) == 0 {
+		return nil, "", false
 	}
 
-	return pred.value[0] == 0x04
-}
-
-func decodeSortableNumber(value []byte) *big.Rat {
-	if !validSortableNumber(value) {
-		return nil
-	}
-	if value[0] == 0x01 {
-		return new(big.Rat)
-	}
-
-	negative := value[0] == 0x00
-	magnitude := bytes.Clone(value[1:])
-	if negative {
-		for i := range magnitude {
-			magnitude[i] = ^magnitude[i]
-		}
-	}
-	exponent := int64(binary.BigEndian.Uint64(magnitude[:8]) ^ (uint64(1) << 63))
-	digits := make([]byte, len(magnitude)-9)
-	for i, digit := range magnitude[8 : len(magnitude)-1] {
-		digits[i] = digit - 1 + '0'
-	}
-	coefficient, ok := new(big.Int).SetString(string(digits), 10)
-	if !ok {
-		return nil
-	}
-	if negative {
-		coefficient.Neg(coefficient)
-	}
-
-	scale := int64(len(digits)) - exponent
-	if scale >= 0 {
-		denominator := new(big.Int).Exp(big.NewInt(10), big.NewInt(scale), nil)
-
-		return new(big.Rat).SetFrac(coefficient, denominator)
-	}
-	coefficient.Mul(coefficient, new(big.Int).Exp(big.NewInt(10), big.NewInt(-scale), nil))
-
-	return new(big.Rat).SetInt(coefficient)
-}
-
-func queryDocRoot(value []byte) (map[string]any, error) {
-	doc, err := decodeDoc(value)
-	if err != nil {
-		return nil, err
-	}
-
-	decoder := json.NewDecoder(bytes.NewReader(doc.json))
-	decoder.UseNumber()
-
-	var root map[string]any
-	if err := decoder.Decode(&root); err != nil {
-		return nil, err
-	}
-	if err := ensureJSONEnd(decoder); err != nil {
-		return nil, err
-	}
-
-	return root, nil
-}
-
-func rangeMatch(value any, pred predicate) (bool, error) {
-	encoded, err := encodeIndexValue(value)
-	if errors.Is(err, errUnsupportedIdxValue) {
-		return false, nil
-	}
-	if err != nil {
-		return false, err
-	}
-	if encoded[0] != pred.value[0] {
-		return false, nil
-	}
-
-	var comparison int
-
-	switch pred.value[0] {
+	rest := key[len(prefix):]
+	end := 0
+	switch prefix[len(prefix)-1] {
 	case 0x03:
-		left := decodeSortableNumber(encoded[1:])
-		if left == nil {
-			return false, errors.New("invalid encoded number")
+		if len(rest) == 0 {
+			return nil, "", false
 		}
-		comparison = left.Cmp(pred.number)
+		switch rest[0] {
+		case 0x01:
+			end = 1
+		case 0x00, 0x02:
+			terminator := byte(0x00)
+			if rest[0] == 0x00 {
+				terminator = 0xff
+			}
+			if len(rest) < 11 {
+				return nil, "", false
+			}
+			position := bytes.IndexByte(rest[9:], terminator)
+			if position < 1 {
+				return nil, "", false
+			}
+			end = 9 + position + 1
+		default:
+			return nil, "", false
+		}
 	case 0x04:
-		comparison = bytes.Compare(encoded[1:], pred.value[1:])
+		for end < len(rest)-1 {
+			if rest[end] != 0x00 {
+				end++
+				continue
+			}
+			if rest[end+1] == 0xff {
+				end += 2
+				continue
+			}
+			if rest[end+1] == 0x00 {
+				end += 2
+				break
+			}
+			return nil, "", false
+		}
 	default:
-		return false, nil
+		return nil, "", false
+	}
+	value := append([]byte{prefix[len(prefix)-1]}, rest[:end]...)
+	if !validIndexValue(value) {
+		return nil, "", false
 	}
 
-	switch pred.op {
-	case cmpLT:
-		return comparison < 0, nil
-	case cmpLE:
-		return comparison <= 0, nil
-	case cmpGT:
-		return comparison > 0, nil
-	case cmpGE:
-		return comparison >= 0, nil
-	default:
-		return false, errors.New("invalid comparison operator")
-	}
+	return value, string(rest[end:]), true
 }
 
 func snapshotHas(snapshot *pebble.Snapshot, key []byte) (bool, error) {
