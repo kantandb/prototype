@@ -39,3 +39,4 @@ go.work.sum
 *.md
 !README.md
 !/docs/**
+/design/
