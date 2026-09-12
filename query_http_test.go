@@ -21,7 +21,7 @@ func TestQueryDocumentsHTTP(t *testing.T) {
 
 	var active []string
 	for _, body := range []string{`{"active":true}`, `{"active":false}`, `{"active":true}`, `{"active":true}`} {
-		res = sendRequest(t, server, http.MethodPost, "/users/", body, "application/json")
+		res = sendRequest(t, server, http.MethodPost, "/users", body, "application/json")
 		if res.StatusCode != http.StatusCreated {
 			t.Fatalf("status = %d, want %d; body = %s", res.StatusCode, http.StatusCreated, readResponse(t, res))
 		}
@@ -137,7 +137,7 @@ func TestQueryScalarValuesHTTP(t *testing.T) {
 		"object":  `{"value":{"nested":true}}`,
 		"array":   `{"value":[1]}`,
 	} {
-		ids[name] = createQueryDoc(t, server, "/values/", body)
+		ids[name] = createQueryDoc(t, server, "/values", body)
 	}
 
 	tests := []struct {
@@ -187,12 +187,12 @@ func TestRangeQueryHTTP(t *testing.T) {
 	res := sendRequest(t, server, http.MethodPost, "/", `{"name":"scores","indexes":[{"name":"score","path":"/score"},{"name":"rank","path":"/score"}]}`, "application/json")
 	checkResponse(t, res, http.StatusCreated, `{"name":"scores","indexes":[{"name":"score","path":"/score"},{"name":"rank","path":"/score"}]}`)
 
-	createQueryDoc(t, server, "/scores/", `{"score":0}`)
-	firstID := createQueryDoc(t, server, "/scores/", `{"score":10}`)
-	createQueryDoc(t, server, "/scores/", `{}`)
+	createQueryDoc(t, server, "/scores", `{"score":0}`)
+	firstID := createQueryDoc(t, server, "/scores", `{"score":10}`)
+	createQueryDoc(t, server, "/scores", `{}`)
 	want := []string{
 		firstID,
-		createQueryDoc(t, server, "/scores/", `{"score":20}`),
+		createQueryDoc(t, server, "/scores", `{"score":20}`),
 	}
 	slices.Sort(want)
 
@@ -262,7 +262,7 @@ func TestRangeSemanticsHTTP(t *testing.T) {
 		{name: "object", body: `{"value":{}}`},
 		{name: "array", body: `{"value":[]}`},
 	} {
-		ids[document.name] = createQueryDoc(t, server, "/values/", document.body)
+		ids[document.name] = createQueryDoc(t, server, "/values", document.body)
 	}
 
 	tests := []struct {
@@ -307,9 +307,9 @@ func TestRangeValueOrderHTTP(t *testing.T) {
 	res := sendRequest(t, server, http.MethodPost, "/", `{"name":"values","indexes":[{"name":"value","path":"/value"}]}`, "application/json")
 	checkResponse(t, res, http.StatusCreated, `{"name":"values","indexes":[{"name":"value","path":"/value"}]}`)
 
-	twenty := createQueryDoc(t, server, "/values/", `{"value":20}`)
-	tenA := createQueryDoc(t, server, "/values/", `{"value":10}`)
-	tenB := createQueryDoc(t, server, "/values/", `{"value":10.0}`)
+	twenty := createQueryDoc(t, server, "/values", `{"value":20}`)
+	tenA := createQueryDoc(t, server, "/values", `{"value":10}`)
+	tenB := createQueryDoc(t, server, "/values", `{"value":10.0}`)
 	want := []string{tenA, tenB, twenty}
 
 	var documents []string

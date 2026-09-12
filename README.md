@@ -13,6 +13,8 @@ mise run build
 
 ## HTTP examples
 
+Paths are canonical without a trailing slash. Trailing-slash variants redirect to the canonical path.
+
 ```sh
 # Check health.
 xh GET localhost:8080/healthz
@@ -25,7 +27,7 @@ xh POST localhost:8080/ name=example \
 xh GET localhost:8080/ limit==100 cursor==example
 
 # Create a document.
-xh POST localhost:8080/example/ name=KantanDB \
+xh POST localhost:8080/example name=KantanDB \
   email=alice@example.com age:=34 active:=true
 
 # List document IDs, optionally after a cursor.

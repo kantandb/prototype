@@ -21,9 +21,58 @@ func TestRoutingErrorsUseEnvelope(t *testing.T) {
 
 	res = sendRequest(t, server, http.MethodPatch, "/", "", "")
 	checkResponse(t, res, http.StatusMethodNotAllowed, `{"error":{"code":"method_not_allowed","message":"Method is not allowed"}}`)
+}
 
-	res = sendRequest(t, server, http.MethodGet, "/healthz/", "", "")
-	checkResponse(t, res, http.StatusMethodNotAllowed, `{"error":{"code":"method_not_allowed","message":"Method is not allowed"}}`)
+func TestTrailingSlashRedirects(t *testing.T) {
+	t.Parallel()
+
+	server := newTestServer(t, defaultMaxBodyBytes)
+	res := sendRequest(t, server, http.MethodPost, "/", `{"name":"db"}`, "application/json")
+	checkResponse(t, res, http.StatusCreated, `{"name":"db"}`)
+
+	client := *server.Client()
+	client.CheckRedirect = func(*http.Request, []*http.Request) error {
+		return http.ErrUseLastResponse
+	}
+
+	tests := []struct {
+		method   string
+		path     string
+		body     string
+		status   int
+		location string
+	}{
+		{method: http.MethodGet, path: "/healthz/", status: http.StatusMovedPermanently, location: "/healthz"},
+		{method: http.MethodGet, path: "/db/", status: http.StatusMovedPermanently, location: "/db"},
+		{method: http.MethodPost, path: "/db/", body: `{}`, status: http.StatusTemporaryRedirect, location: "/db"},
+	}
+	for _, tt := range tests {
+		req, err := http.NewRequestWithContext(t.Context(), tt.method, server.URL+tt.path, strings.NewReader(tt.body))
+		if err != nil {
+			t.Fatalf("NewRequestWithContext() error = %v", err)
+		}
+		if tt.body != "" {
+			req.Header.Set("Content-Type", "application/json")
+		}
+
+		res, err := client.Do(req)
+		if err != nil {
+			t.Fatalf("Do() error = %v", err)
+		}
+		if res.StatusCode != tt.status {
+			t.Errorf("%s %s status = %d, want %d", tt.method, tt.path, res.StatusCode, tt.status)
+		}
+		if got := res.Header.Get("Location"); got != tt.location {
+			t.Errorf("%s %s Location = %q, want %q", tt.method, tt.path, got, tt.location)
+		}
+		_ = readResponse(t, res)
+	}
+
+	res = sendRequest(t, server, http.MethodPost, "/db/", `{"redirected":true}`, "application/json")
+	if res.StatusCode != http.StatusCreated {
+		t.Errorf("redirected POST status = %d, want %d", res.StatusCode, http.StatusCreated)
+	}
+	_ = readResponse(t, res)
 }
 
 func TestStoppingReturnsUnavailable(t *testing.T) {

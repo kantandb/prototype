@@ -150,7 +150,7 @@ func createHTTPDoc(t *testing.T, server *httptest.Server, body string) (string, 
 	res := sendRequest(t, server, http.MethodPost, "/", `{"name":"db"}`, "application/json")
 	checkResponse(t, res, http.StatusCreated, `{"name":"db"}`)
 
-	res = sendRequest(t, server, http.MethodPost, "/db/", body, "application/json")
+	res = sendRequest(t, server, http.MethodPost, "/db", body, "application/json")
 	if res.StatusCode != http.StatusCreated {
 		t.Fatalf("status = %d, want %d; body = %s", res.StatusCode, http.StatusCreated, readResponse(t, res))
 	}

@@ -114,7 +114,7 @@ func (a *api) handler() http.Handler {
 	router := gin.New()
 	router.HandleMethodNotAllowed = true
 	router.RedirectFixedPath = false
-	router.RedirectTrailingSlash = false
+	router.RedirectTrailingSlash = true
 	router.Use(a.recover, a.rejectStopping)
 	router.GET("/healthz", a.health)
 	router.POST("/", a.createDB)
@@ -123,7 +123,7 @@ func (a *api) handler() http.Handler {
 	router.Handle(queryMethod, "/:database", a.queryDocs)
 	router.OPTIONS("/:database", a.queryOptions)
 	router.DELETE("/:database", a.deleteDB)
-	router.POST("/:database/", a.createDoc)
+	router.POST("/:database", a.createDoc)
 	router.GET("/:database/:id", a.getDoc)
 	router.PUT("/:database/:id", a.replaceDoc)
 	router.PATCH("/:database/:id", a.patchDoc)

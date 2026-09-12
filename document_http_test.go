@@ -16,7 +16,7 @@ func TestDocumentLifecycleHTTP(t *testing.T) {
 	res := sendRequest(t, server, http.MethodPost, "/", `{"name":"db"}`, "application/json")
 	checkResponse(t, res, http.StatusCreated, `{"name":"db"}`)
 
-	res = sendRequest(t, server, http.MethodPost, "/db/", ` { "z": 1, "a": true } `, "application/json; charset=utf-8")
+	res = sendRequest(t, server, http.MethodPost, "/db", ` { "z": 1, "a": true } `, "application/json; charset=utf-8")
 	if res.StatusCode != http.StatusCreated {
 		t.Fatalf("status = %d, want %d; body = %s", res.StatusCode, http.StatusCreated, readResponse(t, res))
 	}
@@ -66,7 +66,7 @@ func TestListDocumentsHTTP(t *testing.T) {
 
 	var ids []string
 	for range 3 {
-		res = sendRequest(t, server, http.MethodPost, "/db/", `{}`, "application/json")
+		res = sendRequest(t, server, http.MethodPost, "/db", `{}`, "application/json")
 		if res.StatusCode != http.StatusCreated {
 			t.Fatalf("status = %d, want %d; body = %s", res.StatusCode, http.StatusCreated, readResponse(t, res))
 		}
@@ -162,10 +162,10 @@ func TestOversizedIndexedValueHTTP(t *testing.T) {
 	checkResponse(t, res, http.StatusCreated, `{"name":"db","indexes":[{"name":"value","path":"/value"}]}`)
 
 	large := `{"value":"` + strings.Repeat("x", maxIndexValue) + `"}`
-	res = sendRequest(t, server, http.MethodPost, "/db/", large, "application/json")
+	res = sendRequest(t, server, http.MethodPost, "/db", large, "application/json")
 	checkResponse(t, res, http.StatusBadRequest, `{"error":{"code":"invalid_document","message":"An indexed value exceeds the size limit"}}`)
 
-	id := createQueryDoc(t, server, "/db/", `{"value":"ok"}`)
+	id := createQueryDoc(t, server, "/db", `{"value":"ok"}`)
 	res = sendRequest(t, server, http.MethodPut, "/db/"+id, large, "application/json")
 	checkResponse(t, res, http.StatusBadRequest, `{"error":{"code":"invalid_document","message":"An indexed value exceeds the size limit"}}`)
 
@@ -203,7 +203,7 @@ func TestCreateDocumentValidationHTTP(t *testing.T) {
 			res := sendRequest(t, server, http.MethodPost, "/", `{"name":"db"}`, "application/json")
 			checkResponse(t, res, http.StatusCreated, `{"name":"db"}`)
 
-			res = sendRequest(t, server, http.MethodPost, "/db/", tt.body, tt.contentType)
+			res = sendRequest(t, server, http.MethodPost, "/db", tt.body, tt.contentType)
 			body := readResponse(t, res)
 			if res.StatusCode != tt.status {
 				t.Errorf("status = %d, want %d; body = %s", res.StatusCode, tt.status, body)
@@ -221,7 +221,7 @@ func TestDocumentMissingResourcesAndPathsHTTP(t *testing.T) {
 	server := newTestServer(t, defaultMaxBodyBytes)
 	id := "01950000-0000-7000-8000-000000000001"
 
-	res := sendRequest(t, server, http.MethodPost, "/missing/", `{}`, "application/json")
+	res := sendRequest(t, server, http.MethodPost, "/missing", `{}`, "application/json")
 	checkResponse(t, res, http.StatusNotFound, `{"error":{"code":"database_not_found","message":"Database does not exist"}}`)
 
 	res = sendRequest(t, server, http.MethodGet, "/missing/"+id, "", "")
@@ -265,7 +265,7 @@ func TestHTTPDurabilityAcrossRestarts(t *testing.T) {
 	start()
 	res := sendRequest(t, server, http.MethodPost, "/", `{"name":"db"}`, "application/json")
 	checkResponse(t, res, http.StatusCreated, `{"name":"db"}`)
-	res = sendRequest(t, server, http.MethodPost, "/db/", `{"stage":"created"}`, "application/json")
+	res = sendRequest(t, server, http.MethodPost, "/db", `{"stage":"created"}`, "application/json")
 	if res.StatusCode != http.StatusCreated {
 		t.Fatalf("status = %d, want %d; body = %s", res.StatusCode, http.StatusCreated, readResponse(t, res))
 	}

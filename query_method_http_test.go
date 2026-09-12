@@ -15,9 +15,9 @@ func TestPathQueryHTTP(t *testing.T) {
 	res := sendRequest(t, server, http.MethodPost, "/", `{"name":"users"}`, "application/json")
 	checkResponse(t, res, http.StatusCreated, `{"name":"users"}`)
 
-	first := createQueryDoc(t, server, "/users/", `{"profile":{"age":29},"tags":["staff"]}`)
-	second := createQueryDoc(t, server, "/users/", `{"profile":{"age":30},"tags":["admin","staff"]}`)
-	third := createQueryDoc(t, server, "/users/", `{"profile":{"age":31}}`)
+	first := createQueryDoc(t, server, "/users", `{"profile":{"age":29},"tags":["staff"]}`)
+	second := createQueryDoc(t, server, "/users", `{"profile":{"age":30},"tags":["admin","staff"]}`)
+	third := createQueryDoc(t, server, "/users", `{"profile":{"age":31}}`)
 
 	body := `{"path":"$.profile.age","op":"ge","value":30,"limit":1}`
 	res = sendRequest(t, server, queryMethod, "/users", body, "application/json; charset=utf-8")
@@ -63,8 +63,8 @@ func TestPathQueryUsesIndexHTTP(t *testing.T) {
 	res := sendRequest(t, server, http.MethodPost, "/", `{"name":"scores","indexes":[{"name":"score","path":"/score"}]}`, "application/json")
 	checkResponse(t, res, http.StatusCreated, `{"name":"scores","indexes":[{"name":"score","path":"/score"}]}`)
 
-	twenty := createQueryDoc(t, server, "/scores/", `{"score":20}`)
-	ten := createQueryDoc(t, server, "/scores/", `{"score":10}`)
+	twenty := createQueryDoc(t, server, "/scores", `{"score":20}`)
+	ten := createQueryDoc(t, server, "/scores", `{"score":10}`)
 
 	body := `{"path":"$.score","op":"ge","value":10,"limit":1}`
 	res = sendRequest(t, server, queryMethod, "/scores", body, "application/json")
@@ -103,8 +103,8 @@ func TestPathQueryNumericTokenHTTP(t *testing.T) {
 	res := sendRequest(t, server, http.MethodPost, "/", `{"name":"stock","indexes":[{"name":"sku","path":"/items/0/sku"}]}`, "application/json")
 	checkResponse(t, res, http.StatusCreated, `{"name":"stock","indexes":[{"name":"sku","path":"/items/0/sku"}]}`)
 
-	arrayID := createQueryDoc(t, server, "/stock/", `{"items":[{"sku":"match"}]}`)
-	objectID := createQueryDoc(t, server, "/stock/", `{"items":{"0":{"sku":"match"}}}`)
+	arrayID := createQueryDoc(t, server, "/stock", `{"items":[{"sku":"match"}]}`)
+	objectID := createQueryDoc(t, server, "/stock", `{"items":{"0":{"sku":"match"}}}`)
 
 	res = sendRequest(t, server, queryMethod, "/stock", `{"path":"$.items[0].sku","value":"match"}`, "application/json")
 	checkResponse(t, res, http.StatusOK, `{"documents":["`+arrayID+`"],"cursor":""}`)
@@ -130,8 +130,8 @@ func TestPathQueryLongCursorHTTP(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Marshal() error = %v", err)
 	}
-	firstID := createQueryDoc(t, server, "/deep/", string(doc))
-	secondID := createQueryDoc(t, server, "/deep/", string(doc))
+	firstID := createQueryDoc(t, server, "/deep", string(doc))
+	secondID := createQueryDoc(t, server, "/deep", string(doc))
 
 	path := "$." + strings.Join(names, ".")
 	body, err := json.Marshal(map[string]any{"path": path, "value": 1, "limit": 1})

@@ -30,7 +30,7 @@ func TestPathQuerySemanticsHTTP(t *testing.T) {
 		"array":    `{"value":[1,2]}`,
 		"escaped":  `{"a/b":{"~x":"match"}}`,
 	} {
-		ids[name] = createQueryDoc(t, server, "/values/", body)
+		ids[name] = createQueryDoc(t, server, "/values", body)
 	}
 
 	tests := []struct {
@@ -82,7 +82,7 @@ func TestPathQueryIsSafeHTTP(t *testing.T) {
 	server := newTestServer(t, defaultMaxBodyBytes)
 	res := sendRequest(t, server, http.MethodPost, "/", `{"name":"users"}`, "application/json")
 	checkResponse(t, res, http.StatusCreated, `{"name":"users"}`)
-	id := createQueryDoc(t, server, "/users/", `{"active":true}`)
+	id := createQueryDoc(t, server, "/users", `{"active":true}`)
 
 	body := `{"path":"$.active","value":true}`
 	for range 2 {
@@ -100,7 +100,7 @@ func TestQueryThroughReverseProxy(t *testing.T) {
 	upstream := newTestServer(t, defaultMaxBodyBytes)
 	res := sendRequest(t, upstream, http.MethodPost, "/", `{"name":"users"}`, "application/json")
 	checkResponse(t, res, http.StatusCreated, `{"name":"users"}`)
-	id := createQueryDoc(t, upstream, "/users/", `{"active":true}`)
+	id := createQueryDoc(t, upstream, "/users", `{"active":true}`)
 
 	target, err := url.Parse(upstream.URL)
 	if err != nil {
