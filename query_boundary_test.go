@@ -128,7 +128,7 @@ func TestQueryThroughReverseProxy(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Do() error = %v", err)
 	}
-	if res.StatusCode != http.StatusNoContent || res.Header.Get("Allow") != "GET, QUERY, DELETE, OPTIONS" || res.Header.Get("Access-Control-Allow-Methods") != queryMethod {
+	if res.StatusCode != http.StatusNoContent || res.Header.Get("Allow") != "GET, POST, QUERY, DELETE, OPTIONS" || res.Header.Get("Access-Control-Allow-Methods") != queryMethod {
 		t.Errorf("preflight status = %d, headers = %v", res.StatusCode, res.Header)
 	}
 	if err := res.Body.Close(); err != nil {

@@ -341,7 +341,7 @@ func (a *api) listDocs(c *gin.Context) {
 
 func (a *api) queryOptions(c *gin.Context) {
 	c.Header("Accept-Query", "application/json")
-	c.Header("Allow", "GET, QUERY, DELETE, OPTIONS")
+	c.Header("Allow", "GET, POST, QUERY, DELETE, OPTIONS")
 	c.Status(http.StatusNoContent)
 }
 
