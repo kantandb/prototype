@@ -11,9 +11,13 @@ mise run build
 
 `-key-file` is required. Its file must contain one base64-encoded 32-byte key. Losing the key makes the data unreadable. Using the wrong key or opening an older plaintext store fails at startup.
 
-## HTTP examples
+## HTTP API
+
+The [OpenAPI 3.2 contract](openapi.yaml) uses native `QUERY` operations. Consumers must support OpenAPI 3.2.
 
 Paths are canonical without a trailing slash. Trailing-slash variants redirect to the canonical path.
+
+### Examples
 
 ```sh
 # Check health.

@@ -1,0 +1,887 @@
+openapi: 3.2.0
+info:
+  title: KantanDB HTTP API
+  version: 0.1.0
+  description: |
+    A JSON document database API.
+
+    Paths without a trailing slash are canonical. Requests with a trailing slash
+    are redirected to the canonical path with 301 for GET and 307 for other
+    methods.
+servers:
+  - url: /
+tags:
+  - name: Service
+  - name: Databases
+  - name: Documents
+paths:
+  /healthz:
+    get:
+      tags: [Service]
+      operationId: getHealth
+      summary: Check service health
+      responses:
+        "200":
+          description: The service is healthy.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Health"
+              example:
+                status: ok
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+
+  /:
+    get:
+      tags: [Databases]
+      operationId: listDatabases
+      summary: List databases
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/DatabaseCursor"
+      responses:
+        "200":
+          description: Database names in ascending order.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DatabaseList"
+              example:
+                databases: [accounts, users]
+        "400":
+          $ref: "#/components/responses/BadRequest"
+          description: The limit or cursor is invalid.
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+
+    post:
+      tags: [Databases]
+      operationId: createDatabase
+      summary: Create a database
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Database"
+            examples:
+              withoutIndexes:
+                value:
+                  name: users
+              withIndexes:
+                value:
+                  name: users
+                  indexes:
+                    - name: email
+                      path: /email
+      responses:
+        "201":
+          description: The database was created.
+          headers:
+            Location:
+              $ref: "#/components/headers/Location"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Database"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+          description: The request, database name, or index definitions are invalid.
+        "409":
+          $ref: "#/components/responses/DatabaseExists"
+        "413":
+          $ref: "#/components/responses/ContentTooLarge"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+
+  /{database}:
+    parameters:
+      - $ref: "#/components/parameters/Database"
+
+    get:
+      tags: [Documents]
+      operationId: listDocuments
+      summary: List or query document IDs
+      description: |
+        Without `index` and `value`, lists every document ID. With both fields,
+        queries one secondary index. `index` and `value` must appear together,
+        and `op` may only appear with them. Unknown or repeated parameters are
+        rejected. Equality accepts any JSON scalar. Ordering accepts only JSON
+        numbers and strings. `value` is a URL-encoded JSON scalar, not a plain
+        string.
+      externalDocs:
+        description: Query language
+        url: docs/query-language.md
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/DocumentCursor"
+        - $ref: "#/components/parameters/Index"
+        - $ref: "#/components/parameters/Operator"
+        - $ref: "#/components/parameters/IndexValue"
+      responses:
+        "200":
+          description: A page of document IDs.
+          headers:
+            Accept-Query:
+              $ref: "#/components/headers/AcceptQuery"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DocumentList"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+          description: The database name, query, limit, or cursor is invalid.
+        "404":
+          $ref: "#/components/responses/NotFound"
+          description: The database or requested index does not exist.
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+
+    post:
+      tags: [Documents]
+      operationId: createDocument
+      summary: Create a document
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Document"
+            example:
+              name: Alice
+              active: true
+      responses:
+        "201":
+          description: The document was created.
+          headers:
+            Location:
+              $ref: "#/components/headers/Location"
+            ETag:
+              $ref: "#/components/headers/ETag"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DocumentCreated"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+          description: The database name or document is invalid.
+        "404":
+          $ref: "#/components/responses/NotFound"
+          description: The database does not exist.
+        "413":
+          $ref: "#/components/responses/ContentTooLarge"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+
+    query:
+      tags: [Documents]
+      operationId: queryDocuments
+      summary: Query document IDs with JSONPath
+      description: |
+        Selects documents with an RFC 9535 JSONPath supplied in the request
+        body. URI query parameters, unknown or duplicate fields, and trailing
+        JSON are rejected. Equality accepts any JSON scalar. Ordering accepts
+        only JSON numbers and strings. Requests are limited to 64 KiB and five
+        seconds. Scan queries examine at most 10,000 documents per page.
+      externalDocs:
+        description: Query language
+        url: docs/query-language.md
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PathQuery"
+            example:
+              path: $.profile.age
+              op: ge
+              value: 18
+              limit: 100
+      responses:
+        "200":
+          description: A page of matching document IDs.
+          headers:
+            Accept-Query:
+              $ref: "#/components/headers/AcceptQuery"
+            Cache-Control:
+              $ref: "#/components/headers/NoStore"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DocumentList"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+          description: The database name, request body, query, or cursor is invalid.
+        "404":
+          $ref: "#/components/responses/NotFound"
+          description: The database does not exist.
+        "413":
+          $ref: "#/components/responses/ContentTooLarge"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+          description: The service is unavailable or a query limit was exceeded.
+
+    options:
+      tags: [Documents]
+      operationId: getDocumentCollectionOptions
+      summary: Get document collection capabilities
+      responses:
+        "204":
+          description: Collection capabilities.
+          headers:
+            Accept-Query:
+              $ref: "#/components/headers/AcceptQuery"
+            Allow:
+              $ref: "#/components/headers/Allow"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+
+    delete:
+      tags: [Databases]
+      operationId: deleteDatabase
+      summary: Delete a database
+      responses:
+        "204":
+          description: The database was deleted.
+        "400":
+          $ref: "#/components/responses/BadRequest"
+          description: The database name is invalid.
+        "404":
+          $ref: "#/components/responses/NotFound"
+          description: The database does not exist.
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+
+  /{database}/{id}:
+    parameters:
+      - $ref: "#/components/parameters/Database"
+      - $ref: "#/components/parameters/DocumentID"
+
+    get:
+      tags: [Documents]
+      operationId: getDocument
+      summary: Get a document
+      responses:
+        "200":
+          description: The stored document.
+          headers:
+            ETag:
+              $ref: "#/components/headers/ETag"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Document"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+          description: The database name or document ID is invalid.
+        "404":
+          $ref: "#/components/responses/NotFound"
+          description: The document does not exist.
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+
+    put:
+      tags: [Documents]
+      operationId: replaceDocument
+      summary: Replace a document
+      parameters:
+        - $ref: "#/components/parameters/IfMatch"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Document"
+      responses:
+        "200":
+          description: The replaced document.
+          headers:
+            ETag:
+              $ref: "#/components/headers/ETag"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Document"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+          description: The path, If-Match header, or document is invalid.
+        "404":
+          $ref: "#/components/responses/NotFound"
+          description: The document does not exist.
+        "412":
+          $ref: "#/components/responses/PreconditionFailed"
+        "413":
+          $ref: "#/components/responses/ContentTooLarge"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+
+    patch:
+      tags: [Documents]
+      operationId: patchDocument
+      summary: Patch a document
+      parameters:
+        - $ref: "#/components/parameters/IfMatch"
+      requestBody:
+        required: true
+        content:
+          application/merge-patch+json:
+            schema:
+              $ref: "#/components/schemas/MergePatch"
+          application/json-patch+json:
+            schema:
+              $ref: "#/components/schemas/JSONPatch"
+      responses:
+        "200":
+          description: The patched document.
+          headers:
+            ETag:
+              $ref: "#/components/headers/ETag"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Document"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+          description: The path, If-Match header, or patch is invalid.
+        "404":
+          $ref: "#/components/responses/NotFound"
+          description: The document does not exist.
+        "412":
+          $ref: "#/components/responses/PreconditionFailed"
+        "413":
+          $ref: "#/components/responses/ContentTooLarge"
+        "415":
+          $ref: "#/components/responses/UnsupportedPatchMediaType"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+
+    delete:
+      tags: [Documents]
+      operationId: deleteDocument
+      summary: Delete a document
+      parameters:
+        - $ref: "#/components/parameters/IfMatch"
+      responses:
+        "204":
+          description: The document was deleted.
+        "400":
+          $ref: "#/components/responses/BadRequest"
+          description: The path or If-Match header is invalid.
+        "404":
+          $ref: "#/components/responses/NotFound"
+          description: The document does not exist.
+        "412":
+          $ref: "#/components/responses/PreconditionFailed"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+
+components:
+  schemas:
+    Health:
+      type: object
+      additionalProperties: false
+      required: [status]
+      properties:
+        status:
+          type: string
+          const: ok
+
+    Name:
+      type: string
+      minLength: 1
+      maxLength: 63
+      pattern: "^[a-z][a-z0-9_-]{0,62}$"
+
+    Index:
+      type: object
+      additionalProperties: false
+      required: [name, path]
+      properties:
+        name:
+          $ref: "#/components/schemas/Name"
+        path:
+          type: string
+          description: RFC 6901 JSON Pointer to an indexed value.
+          minLength: 1
+          maxLength: 256
+          pattern: "^/(?:[^~]|~[01])*$"
+          examples: [/email, /profile/age]
+
+    Database:
+      type: object
+      additionalProperties: false
+      required: [name]
+      properties:
+        name:
+          $ref: "#/components/schemas/Name"
+        indexes:
+          type: array
+          maxItems: 16
+          items:
+            $ref: "#/components/schemas/Index"
+
+    DatabaseList:
+      type: object
+      additionalProperties: false
+      required: [databases]
+      properties:
+        databases:
+          type: array
+          items:
+            $ref: "#/components/schemas/Name"
+
+    DocumentList:
+      type: object
+      additionalProperties: false
+      required: [documents, cursor]
+      properties:
+        documents:
+          type: array
+          items:
+            $ref: "#/components/schemas/DocumentID"
+        cursor:
+          type: string
+          description: Empty on the final page; otherwise pass it unchanged to the next request.
+
+    DocumentCreated:
+      type: object
+      additionalProperties: false
+      required: [id]
+      properties:
+        id:
+          $ref: "#/components/schemas/DocumentID"
+
+    DocumentID:
+      type: string
+      description: Lowercase UUIDv7 document identifier.
+      pattern: "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+      examples: [01950000-0000-7000-8000-000000000001]
+
+    Document:
+      type: object
+      additionalProperties: true
+      description: An arbitrary JSON object.
+
+    Scalar:
+      type: [string, number, boolean, "null"]
+      description: A JSON string, number, boolean, or null.
+
+    Operator:
+      type: string
+      enum: [eq, lt, le, gt, ge]
+      default: eq
+
+    PathQuery:
+      type: object
+      additionalProperties: false
+      required: [path, value]
+      properties:
+        path:
+          type: string
+          description: RFC 9535 JSONPath.
+          minLength: 1
+          maxLength: 256
+        value:
+          $ref: "#/components/schemas/Scalar"
+        op:
+          $ref: "#/components/schemas/Operator"
+        limit:
+          type: integer
+          minimum: 1
+          maximum: 1000
+          default: 100
+        cursor:
+          type: string
+          default: ""
+
+    MergePatch:
+      type: object
+      additionalProperties: true
+      description: RFC 7386 JSON Merge Patch that produces a JSON object.
+
+    JSONPatch:
+      type: array
+      items:
+        $ref: "#/components/schemas/JSONPatchOperation"
+
+    JSONPatchOperation:
+      type: object
+      required: [op, path]
+      properties:
+        op:
+          type: string
+          enum: [add, remove, replace, move, copy, test]
+        path:
+          type: string
+          description: RFC 6901 JSON Pointer.
+        from:
+          type: string
+          description: Required by move and copy.
+        value:
+          description: Required by add, replace, and test.
+
+    ErrorEnvelope:
+      type: object
+      additionalProperties: false
+      required: [error]
+      properties:
+        error:
+          $ref: "#/components/schemas/Error"
+
+    Error:
+      type: object
+      additionalProperties: false
+      required: [code, message]
+      properties:
+        code:
+          $ref: "#/components/schemas/ErrorCode"
+        message:
+          type: string
+
+    ErrorCode:
+      type: string
+      enum:
+        - content_too_large
+        - corrupt_data
+        - database_exists
+        - database_not_found
+        - document_not_found
+        - index_not_found
+        - internal_error
+        - invalid_cursor
+        - invalid_document
+        - invalid_id
+        - invalid_if_match
+        - invalid_limit
+        - invalid_name
+        - invalid_patch
+        - invalid_query
+        - invalid_request
+        - method_not_allowed
+        - precondition_failed
+        - query_limit
+        - query_timeout
+        - route_not_found
+        - service_unavailable
+        - unsupported_media_type
+
+  parameters:
+    Database:
+      name: database
+      in: path
+      required: true
+      description: Database name.
+      schema:
+        $ref: "#/components/schemas/Name"
+
+    DocumentID:
+      name: id
+      in: path
+      required: true
+      description: Document ID.
+      schema:
+        $ref: "#/components/schemas/DocumentID"
+
+    Limit:
+      name: limit
+      in: query
+      description: Maximum number of results.
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 1000
+        default: 100
+
+    DatabaseCursor:
+      name: cursor
+      in: query
+      description: Database name returned as the previous page position.
+      schema:
+        $ref: "#/components/schemas/Name"
+
+    DocumentCursor:
+      name: cursor
+      in: query
+      description: Previous page position. Its format depends on the query form.
+      schema:
+        type: string
+
+    Index:
+      name: index
+      in: query
+      description: Secondary index name. Must be supplied with value.
+      schema:
+        $ref: "#/components/schemas/Name"
+
+    Operator:
+      name: op
+      in: query
+      description: Comparison operator. Requires index and value.
+      schema:
+        $ref: "#/components/schemas/Operator"
+
+    IndexValue:
+      name: value
+      in: query
+      description: URL-encoded JSON scalar. Must be supplied with index.
+      schema:
+        type: string
+      examples:
+        string:
+          summary: JSON string
+          value: '"alice@example.com"'
+        number:
+          summary: JSON number
+          value: "18"
+        boolean:
+          summary: JSON boolean
+          value: "true"
+        null:
+          summary: JSON null
+          value: "null"
+
+    IfMatch:
+      name: If-Match
+      in: header
+      required: false
+      description: Exact current ETag or `*`. When omitted, the operation is unconditional.
+      schema:
+        type: string
+        pattern: '^(\*|"[0-9a-f]{32}")$'
+      examples:
+        revision:
+          value: '"0123456789abcdef0123456789abcdef"'
+        any:
+          value: "*"
+
+  headers:
+    AcceptQuery:
+      description: Supported media type for QUERY request bodies.
+      schema:
+        type: string
+        const: application/json
+
+    Allow:
+      description: Methods supported by the document collection.
+      schema:
+        type: string
+        const: "GET, POST, QUERY, DELETE, OPTIONS"
+
+    ETag:
+      description: Quoted lowercase document revision.
+      schema:
+        type: string
+        pattern: '^"[0-9a-f]{32}"$'
+      example: '"0123456789abcdef0123456789abcdef"'
+
+    Location:
+      description: Relative path of the created resource.
+      schema:
+        type: string
+
+    NoStore:
+      description: Prevents storage of query responses.
+      schema:
+        type: string
+        const: no-store
+
+  responses:
+    BadRequest:
+      description: The request is invalid.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+          examples:
+            invalidRequest:
+              value:
+                error:
+                  code: invalid_request
+                  message: Could not read request body
+            invalidName:
+              value:
+                error:
+                  code: invalid_name
+                  message: Database name is invalid
+            invalidID:
+              value:
+                error:
+                  code: invalid_id
+                  message: Document ID is invalid
+            invalidQuery:
+              value:
+                error:
+                  code: invalid_query
+                  message: Query is invalid
+            invalidCursor:
+              value:
+                error:
+                  code: invalid_cursor
+                  message: Cursor is invalid
+            invalidDocument:
+              value:
+                error:
+                  code: invalid_document
+                  message: Document must be a JSON object
+            invalidPatch:
+              value:
+                error:
+                  code: invalid_patch
+                  message: Patch is invalid or produces a non-object document
+            invalidIfMatch:
+              value:
+                error:
+                  code: invalid_if_match
+                  message: If-Match is invalid
+
+    NotFound:
+      description: A requested resource does not exist.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+          examples:
+            database:
+              value:
+                error:
+                  code: database_not_found
+                  message: Database does not exist
+            index:
+              value:
+                error:
+                  code: index_not_found
+                  message: Index does not exist
+            document:
+              value:
+                error:
+                  code: document_not_found
+                  message: Document does not exist
+
+    DatabaseExists:
+      description: A database with this name already exists.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+          example:
+            error:
+              code: database_exists
+              message: Database already exists
+
+    PreconditionFailed:
+      description: The current document revision does not match If-Match.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+          example:
+            error:
+              code: precondition_failed
+              message: If-Match precondition failed
+
+    ContentTooLarge:
+      description: The request body or resulting document exceeds the configured size limit.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+          example:
+            error:
+              code: content_too_large
+              message: Request body exceeds the size limit
+
+    UnsupportedMediaType:
+      description: Content-Type must be application/json.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+          example:
+            error:
+              code: unsupported_media_type
+              message: Content-Type must be application/json
+
+    UnsupportedPatchMediaType:
+      description: Content-Type must select JSON Merge Patch or JSON Patch.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+          example:
+            error:
+              code: unsupported_media_type
+              message: Content-Type must select a supported patch format
+
+    InternalError:
+      description: Stored data is corrupt or an unexpected server error occurred.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+          examples:
+            internal:
+              value:
+                error:
+                  code: internal_error
+                  message: Internal server error
+            corruption:
+              value:
+                error:
+                  code: corrupt_data
+                  message: Stored data is corrupt
+
+    ServiceUnavailable:
+      description: The service is unavailable or query execution exceeded a limit.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+          examples:
+            unavailable:
+              value:
+                error:
+                  code: service_unavailable
+                  message: Service is unavailable
+            timeout:
+              value:
+                error:
+                  code: query_timeout
+                  message: Query exceeded the execution limit
+            queryLimit:
+              value:
+                error:
+                  code: query_limit
+                  message: Query exceeded the evaluation limit
