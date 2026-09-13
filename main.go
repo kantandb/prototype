@@ -62,7 +62,7 @@ func run(ctx context.Context, cfg config, log *slog.Logger) (runErr error) {
 		errCh <- srv.ListenAndServe()
 	}()
 
-	log.Info("server started", "address", cfg.addr, "data_path", cfg.dataPath, "max_body_bytes", cfg.maxBodyBytes)
+	log.Info("server started", "address", cfg.addr, "data_path", cfg.dataPath, "max_body_bytes", cfg.maxBodyBytes, "version", version())
 
 	select {
 	case err := <-errCh:
