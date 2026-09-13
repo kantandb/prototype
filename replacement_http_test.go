@@ -14,7 +14,7 @@ func TestReplaceAndConditionalDeleteHTTP(t *testing.T) {
 
 	server := newTestServer(t, defaultMaxBodyBytes)
 	id, firstETag := createHTTPDoc(t, server, `{"value":"first"}`)
-	path := "/db/" + id
+	path := "/db/dbname/" + id
 
 	res := sendMatchRequest(t, server, http.MethodPut, path, ` { "value": "second" } `, "application/json", firstETag)
 	secondETag := res.Header.Get("ETag")
@@ -48,7 +48,7 @@ func TestReplaceDocumentValidationHTTP(t *testing.T) {
 
 	server := newTestServer(t, 32)
 	id, _ := createHTTPDoc(t, server, `{}`)
-	path := "/db/" + id
+	path := "/db/dbname/" + id
 
 	tests := []struct {
 		name        string
@@ -63,7 +63,7 @@ func TestReplaceDocumentValidationHTTP(t *testing.T) {
 		{name: "non-object", path: path, body: `[]`, contentType: "application/json", status: http.StatusBadRequest, code: "invalid_document"},
 		{name: "too large", path: path, body: strings.Repeat("x", 33), contentType: "application/json", status: http.StatusRequestEntityTooLarge, code: "content_too_large"},
 		{name: "malformed If-Match", path: path, body: `{}`, contentType: "application/json", ifMatch: "bad", status: http.StatusBadRequest, code: "invalid_if_match"},
-		{name: "missing document", path: "/db/01950000-0000-7000-8000-000000000001", body: `{}`, contentType: "application/json", status: http.StatusNotFound, code: "document_not_found"},
+		{name: "missing document", path: "/db/dbname/01950000-0000-7000-8000-000000000001", body: `{}`, contentType: "application/json", status: http.StatusNotFound, code: "document_not_found"},
 	}
 
 	for _, tt := range tests {
@@ -88,7 +88,7 @@ func TestConcurrentConditionalReplaceHTTP(t *testing.T) {
 
 	server := newTestServer(t, defaultMaxBodyBytes)
 	id, etag := createHTTPDoc(t, server, `{"value":0}`)
-	path := "/db/" + id
+	path := "/db/dbname/" + id
 
 	const workers = 8
 	statuses := make(chan int, workers)
@@ -147,10 +147,10 @@ func TestConcurrentConditionalReplaceHTTP(t *testing.T) {
 func createHTTPDoc(t *testing.T, server *httptest.Server, body string) (string, string) {
 	t.Helper()
 
-	res := sendRequest(t, server, http.MethodPost, "/", `{"name":"db"}`, "application/json")
-	checkResponse(t, res, http.StatusCreated, `{"name":"db"}`)
+	res := sendRequest(t, server, http.MethodPost, "/db", `{"name":"dbname"}`, "application/json")
+	checkResponse(t, res, http.StatusCreated, `{"name":"dbname"}`)
 
-	res = sendRequest(t, server, http.MethodPost, "/db", body, "application/json")
+	res = sendRequest(t, server, http.MethodPost, "/db/dbname", body, "application/json")
 	if res.StatusCode != http.StatusCreated {
 		t.Fatalf("status = %d, want %d; body = %s", res.StatusCode, http.StatusCreated, readResponse(t, res))
 	}

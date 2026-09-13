@@ -11,7 +11,7 @@ func TestPatchDocumentHTTP(t *testing.T) {
 
 	server := newTestServer(t, defaultMaxBodyBytes)
 	id, firstETag := createHTTPDoc(t, server, `{"name":"first","nested":{"a":1},"remove":true}`)
-	path := "/db/" + id
+	path := "/db/dbname/" + id
 
 	merge := `{"name":"second","nested":{"b":2},"remove":null}`
 	res := sendMatchRequest(t, server, http.MethodPatch, path, merge, mergePatchType, firstETag)
@@ -48,7 +48,7 @@ func TestPatchDocumentValidationHTTP(t *testing.T) {
 
 	server := newTestServer(t, 50)
 	id, _ := createHTTPDoc(t, server, `{"first":"12345678901234567890"}`)
-	path := "/db/" + id
+	path := "/db/dbname/" + id
 
 	tests := []struct {
 		name        string
@@ -66,7 +66,7 @@ func TestPatchDocumentValidationHTTP(t *testing.T) {
 		{name: "body too large", path: path, body: strings.Repeat("x", 51), contentType: mergePatchType, status: http.StatusRequestEntityTooLarge, code: "content_too_large"},
 		{name: "result too large", path: path, body: `{"second":"12345678901234567890"}`, contentType: mergePatchType, status: http.StatusRequestEntityTooLarge, code: "content_too_large"},
 		{name: "malformed If-Match", path: path, body: `{}`, contentType: mergePatchType, ifMatch: "bad", status: http.StatusBadRequest, code: "invalid_if_match"},
-		{name: "missing document", path: "/db/01950000-0000-7000-8000-000000000001", body: `{}`, contentType: mergePatchType, status: http.StatusNotFound, code: "document_not_found"},
+		{name: "missing document", path: "/db/dbname/01950000-0000-7000-8000-000000000001", body: `{}`, contentType: mergePatchType, status: http.StatusNotFound, code: "document_not_found"},
 	}
 
 	for _, tt := range tests {

@@ -51,6 +51,11 @@ func (r dbRequest) indexDefs() []indexDef {
 	return defs
 }
 
+type serviceInfo struct {
+	Name    string `json:"name"`
+	Version string `json:"version"`
+}
+
 type dbList struct {
 	Databases []string `json:"databases"`
 }
@@ -116,18 +121,19 @@ func (a *api) handler() http.Handler {
 	router.RedirectFixedPath = false
 	router.RedirectTrailingSlash = true
 	router.Use(a.recover, a.rejectStopping)
+	router.GET("/", a.welcome)
 	router.GET("/healthz", a.health)
-	router.POST("/", a.createDB)
-	router.GET("/", a.listDBs)
-	router.GET("/:database", a.listDocs)
-	router.Handle(queryMethod, "/:database", a.queryDocs)
-	router.OPTIONS("/:database", a.queryOptions)
-	router.DELETE("/:database", a.deleteDB)
-	router.POST("/:database", a.createDoc)
-	router.GET("/:database/:id", a.getDoc)
-	router.PUT("/:database/:id", a.replaceDoc)
-	router.PATCH("/:database/:id", a.patchDoc)
-	router.DELETE("/:database/:id", a.deleteDoc)
+	router.POST("/db", a.createDB)
+	router.GET("/db", a.listDBs)
+	router.GET("/db/:database", a.listDocs)
+	router.Handle(queryMethod, "/db/:database", a.queryDocs)
+	router.OPTIONS("/db/:database", a.queryOptions)
+	router.DELETE("/db/:database", a.deleteDB)
+	router.POST("/db/:database", a.createDoc)
+	router.GET("/db/:database/:id", a.getDoc)
+	router.PUT("/db/:database/:id", a.replaceDoc)
+	router.PATCH("/db/:database/:id", a.patchDoc)
+	router.DELETE("/db/:database/:id", a.deleteDoc)
 	router.NoRoute(func(c *gin.Context) {
 		writeError(c, http.StatusNotFound, "route_not_found", "Route does not exist")
 	})
@@ -172,6 +178,10 @@ func (a *api) rejectStopping(c *gin.Context) {
 	}
 
 	c.Next()
+}
+
+func (a *api) welcome(c *gin.Context) {
+	c.JSON(http.StatusOK, serviceInfo{Name: "KantanDB", Version: version()})
 }
 
 func (a *api) health(c *gin.Context) {
@@ -228,7 +238,7 @@ func (a *api) createDB(c *gin.Context) {
 		return
 	}
 
-	c.Header("Location", "/"+request.Name)
+	c.Header("Location", "/db/"+request.Name)
 	c.JSON(http.StatusCreated, request)
 }
 
@@ -686,7 +696,7 @@ func (a *api) createDoc(c *gin.Context) {
 		return
 	}
 
-	c.Header("Location", "/"+database+"/"+id)
+	c.Header("Location", "/db/"+database+"/"+id)
 	c.Header("ETag", formatETag(rev))
 	c.JSON(http.StatusCreated, docResponse{ID: id})
 }

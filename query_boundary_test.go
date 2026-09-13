@@ -14,7 +14,7 @@ func TestPathQuerySemanticsHTTP(t *testing.T) {
 	t.Parallel()
 
 	server := newTestServer(t, defaultMaxBodyBytes)
-	res := sendRequest(t, server, http.MethodPost, "/", `{"name":"values"}`, "application/json")
+	res := sendRequest(t, server, http.MethodPost, "/db", `{"name":"values"}`, "application/json")
 	checkResponse(t, res, http.StatusCreated, `{"name":"values"}`)
 
 	ids := make(map[string]string)
@@ -30,7 +30,7 @@ func TestPathQuerySemanticsHTTP(t *testing.T) {
 		"array":    `{"value":[1,2]}`,
 		"escaped":  `{"a/b":{"~x":"match"}}`,
 	} {
-		ids[name] = createQueryDoc(t, server, "/values", body)
+		ids[name] = createQueryDoc(t, server, "/db/values", body)
 	}
 
 	tests := []struct {
@@ -60,7 +60,7 @@ func TestPathQuerySemanticsHTTP(t *testing.T) {
 				}
 			}
 
-			res := sendRequest(t, server, queryMethod, "/values", string(body), "application/json")
+			res := sendRequest(t, server, queryMethod, "/db/values", string(body), "application/json")
 			var got docList
 			if err := json.NewDecoder(res.Body).Decode(&got); err != nil {
 				t.Fatalf("Decode() error = %v", err)
@@ -80,17 +80,17 @@ func TestPathQueryIsSafeHTTP(t *testing.T) {
 	t.Parallel()
 
 	server := newTestServer(t, defaultMaxBodyBytes)
-	res := sendRequest(t, server, http.MethodPost, "/", `{"name":"users"}`, "application/json")
+	res := sendRequest(t, server, http.MethodPost, "/db", `{"name":"users"}`, "application/json")
 	checkResponse(t, res, http.StatusCreated, `{"name":"users"}`)
-	id := createQueryDoc(t, server, "/users", `{"active":true}`)
+	id := createQueryDoc(t, server, "/db/users", `{"active":true}`)
 
 	body := `{"path":"$.active","value":true}`
 	for range 2 {
-		res = sendRequest(t, server, queryMethod, "/users", body, "application/json")
+		res = sendRequest(t, server, queryMethod, "/db/users", body, "application/json")
 		checkResponse(t, res, http.StatusOK, `{"documents":["`+id+`"],"cursor":""}`)
 	}
 
-	res = sendRequest(t, server, http.MethodGet, "/users/"+id, "", "")
+	res = sendRequest(t, server, http.MethodGet, "/db/users/"+id, "", "")
 	checkResponse(t, res, http.StatusOK, `{"active":true}`)
 }
 
@@ -98,9 +98,9 @@ func TestQueryThroughReverseProxy(t *testing.T) {
 	t.Parallel()
 
 	upstream := newTestServer(t, defaultMaxBodyBytes)
-	res := sendRequest(t, upstream, http.MethodPost, "/", `{"name":"users"}`, "application/json")
+	res := sendRequest(t, upstream, http.MethodPost, "/db", `{"name":"users"}`, "application/json")
 	checkResponse(t, res, http.StatusCreated, `{"name":"users"}`)
-	id := createQueryDoc(t, upstream, "/users", `{"active":true}`)
+	id := createQueryDoc(t, upstream, "/db/users", `{"active":true}`)
 
 	target, err := url.Parse(upstream.URL)
 	if err != nil {
@@ -118,7 +118,7 @@ func TestQueryThroughReverseProxy(t *testing.T) {
 	server := httptest.NewServer(corsProxy)
 	t.Cleanup(server.Close)
 
-	req, err := http.NewRequest(http.MethodOptions, server.URL+"/users", nil)
+	req, err := http.NewRequest(http.MethodOptions, server.URL+"/db/users", nil)
 	if err != nil {
 		t.Fatalf("NewRequest() error = %v", err)
 	}
@@ -135,6 +135,6 @@ func TestQueryThroughReverseProxy(t *testing.T) {
 		t.Errorf("Response.Body.Close() error = %v", err)
 	}
 
-	res = sendRequest(t, server, queryMethod, "/users", `{"path":"$.active","value":true}`, "application/json")
+	res = sendRequest(t, server, queryMethod, "/db/users", `{"path":"$.active","value":true}`, "application/json")
 	checkResponse(t, res, http.StatusOK, `{"documents":["`+id+`"],"cursor":""}`)
 }

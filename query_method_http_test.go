@@ -12,15 +12,15 @@ func TestPathQueryHTTP(t *testing.T) {
 	t.Parallel()
 
 	server := newTestServer(t, defaultMaxBodyBytes)
-	res := sendRequest(t, server, http.MethodPost, "/", `{"name":"users"}`, "application/json")
+	res := sendRequest(t, server, http.MethodPost, "/db", `{"name":"users"}`, "application/json")
 	checkResponse(t, res, http.StatusCreated, `{"name":"users"}`)
 
-	first := createQueryDoc(t, server, "/users", `{"profile":{"age":29},"tags":["staff"]}`)
-	second := createQueryDoc(t, server, "/users", `{"profile":{"age":30},"tags":["admin","staff"]}`)
-	third := createQueryDoc(t, server, "/users", `{"profile":{"age":31}}`)
+	first := createQueryDoc(t, server, "/db/users", `{"profile":{"age":29},"tags":["staff"]}`)
+	second := createQueryDoc(t, server, "/db/users", `{"profile":{"age":30},"tags":["admin","staff"]}`)
+	third := createQueryDoc(t, server, "/db/users", `{"profile":{"age":31}}`)
 
 	body := `{"path":"$.profile.age","op":"ge","value":30,"limit":1}`
-	res = sendRequest(t, server, queryMethod, "/users", body, "application/json; charset=utf-8")
+	res = sendRequest(t, server, queryMethod, "/db/users", body, "application/json; charset=utf-8")
 	if got := res.Header.Get("Accept-Query"); got != "application/json" {
 		t.Errorf("Accept-Query = %q, want application/json", got)
 	}
@@ -40,14 +40,14 @@ func TestPathQueryHTTP(t *testing.T) {
 	}
 
 	body = `{"path":"$.profile.age","op":"ge","value":30,"limit":1,"cursor":"` + page.Cursor + `"}`
-	res = sendRequest(t, server, queryMethod, "/users", body, "application/json")
+	res = sendRequest(t, server, queryMethod, "/db/users", body, "application/json")
 	checkResponse(t, res, http.StatusOK, `{"documents":["`+third+`"],"cursor":""}`)
 
 	body = `{"path":"$.tags[*]","value":"staff"}`
-	res = sendRequest(t, server, queryMethod, "/users", body, "application/json")
+	res = sendRequest(t, server, queryMethod, "/db/users", body, "application/json")
 	checkResponse(t, res, http.StatusOK, `{"documents":["`+first+`","`+second+`"],"cursor":""}`)
 
-	res = sendRequest(t, server, http.MethodGet, "/users", "", "")
+	res = sendRequest(t, server, http.MethodGet, "/db/users", "", "")
 	if got := res.Header.Get("Accept-Query"); got != "application/json" {
 		t.Errorf("GET Accept-Query = %q, want application/json", got)
 	}
@@ -60,14 +60,14 @@ func TestPathQueryUsesIndexHTTP(t *testing.T) {
 	t.Parallel()
 
 	server := newTestServer(t, defaultMaxBodyBytes)
-	res := sendRequest(t, server, http.MethodPost, "/", `{"name":"scores","indexes":[{"name":"score","path":"/score"}]}`, "application/json")
+	res := sendRequest(t, server, http.MethodPost, "/db", `{"name":"scores","indexes":[{"name":"score","path":"/score"}]}`, "application/json")
 	checkResponse(t, res, http.StatusCreated, `{"name":"scores","indexes":[{"name":"score","path":"/score"}]}`)
 
-	twenty := createQueryDoc(t, server, "/scores", `{"score":20}`)
-	ten := createQueryDoc(t, server, "/scores", `{"score":10}`)
+	twenty := createQueryDoc(t, server, "/db/scores", `{"score":20}`)
+	ten := createQueryDoc(t, server, "/db/scores", `{"score":10}`)
 
 	body := `{"path":"$.score","op":"ge","value":10,"limit":1}`
-	res = sendRequest(t, server, queryMethod, "/scores", body, "application/json")
+	res = sendRequest(t, server, queryMethod, "/db/scores", body, "application/json")
 	var first docList
 	if err := json.NewDecoder(res.Body).Decode(&first); err != nil {
 		t.Fatalf("Decode() error = %v", err)
@@ -84,15 +84,15 @@ func TestPathQueryUsesIndexHTTP(t *testing.T) {
 		`{"path":"$.score","op":"gt","value":10,"limit":1,"cursor":"` + first.Cursor + `"}`,
 		`{"path":"$.score","op":"ge","value":11,"limit":1,"cursor":"` + first.Cursor + `"}`,
 	} {
-		res = sendRequest(t, server, queryMethod, "/scores", body, "application/json")
+		res = sendRequest(t, server, queryMethod, "/db/scores", body, "application/json")
 		checkResponse(t, res, http.StatusBadRequest, `{"error":{"code":"invalid_cursor","message":"Cursor is invalid"}}`)
 	}
 
-	res = sendRequest(t, server, http.MethodGet, "/scores?index=score&op=ge&value=10&cursor="+url.QueryEscape(first.Cursor), "", "")
+	res = sendRequest(t, server, http.MethodGet, "/db/scores?index=score&op=ge&value=10&cursor="+url.QueryEscape(first.Cursor), "", "")
 	checkResponse(t, res, http.StatusBadRequest, `{"error":{"code":"invalid_cursor","message":"Cursor is invalid"}}`)
 
 	body = `{"path":"$['score']","op":"ge","value":10,"limit":1,"cursor":"` + first.Cursor + `"}`
-	res = sendRequest(t, server, queryMethod, "/scores", body, "application/json")
+	res = sendRequest(t, server, queryMethod, "/db/scores", body, "application/json")
 	checkResponse(t, res, http.StatusOK, `{"documents":["`+twenty+`"],"cursor":""}`)
 }
 
@@ -100,16 +100,16 @@ func TestPathQueryNumericTokenHTTP(t *testing.T) {
 	t.Parallel()
 
 	server := newTestServer(t, defaultMaxBodyBytes)
-	res := sendRequest(t, server, http.MethodPost, "/", `{"name":"stock","indexes":[{"name":"sku","path":"/items/0/sku"}]}`, "application/json")
+	res := sendRequest(t, server, http.MethodPost, "/db", `{"name":"stock","indexes":[{"name":"sku","path":"/items/0/sku"}]}`, "application/json")
 	checkResponse(t, res, http.StatusCreated, `{"name":"stock","indexes":[{"name":"sku","path":"/items/0/sku"}]}`)
 
-	arrayID := createQueryDoc(t, server, "/stock", `{"items":[{"sku":"match"}]}`)
-	objectID := createQueryDoc(t, server, "/stock", `{"items":{"0":{"sku":"match"}}}`)
+	arrayID := createQueryDoc(t, server, "/db/stock", `{"items":[{"sku":"match"}]}`)
+	objectID := createQueryDoc(t, server, "/db/stock", `{"items":{"0":{"sku":"match"}}}`)
 
-	res = sendRequest(t, server, queryMethod, "/stock", `{"path":"$.items[0].sku","value":"match"}`, "application/json")
+	res = sendRequest(t, server, queryMethod, "/db/stock", `{"path":"$.items[0].sku","value":"match"}`, "application/json")
 	checkResponse(t, res, http.StatusOK, `{"documents":["`+arrayID+`"],"cursor":""}`)
 
-	res = sendRequest(t, server, queryMethod, "/stock", `{"path":"$.items['0'].sku","value":"match"}`, "application/json")
+	res = sendRequest(t, server, queryMethod, "/db/stock", `{"path":"$.items['0'].sku","value":"match"}`, "application/json")
 	checkResponse(t, res, http.StatusOK, `{"documents":["`+objectID+`"],"cursor":""}`)
 }
 
@@ -117,7 +117,7 @@ func TestPathQueryLongCursorHTTP(t *testing.T) {
 	t.Parallel()
 
 	server := newTestServer(t, defaultMaxBodyBytes)
-	res := sendRequest(t, server, http.MethodPost, "/", `{"name":"deep"}`, "application/json")
+	res := sendRequest(t, server, http.MethodPost, "/db", `{"name":"deep"}`, "application/json")
 	checkResponse(t, res, http.StatusCreated, `{"name":"deep"}`)
 
 	names := make([]string, maxPathSegments)
@@ -130,15 +130,15 @@ func TestPathQueryLongCursorHTTP(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Marshal() error = %v", err)
 	}
-	firstID := createQueryDoc(t, server, "/deep", string(doc))
-	secondID := createQueryDoc(t, server, "/deep", string(doc))
+	firstID := createQueryDoc(t, server, "/db/deep", string(doc))
+	secondID := createQueryDoc(t, server, "/db/deep", string(doc))
 
 	path := "$." + strings.Join(names, ".")
 	body, err := json.Marshal(map[string]any{"path": path, "value": 1, "limit": 1})
 	if err != nil {
 		t.Fatalf("Marshal() error = %v", err)
 	}
-	res = sendRequest(t, server, queryMethod, "/deep", string(body), "application/json")
+	res = sendRequest(t, server, queryMethod, "/db/deep", string(body), "application/json")
 	var page docList
 	if err := json.NewDecoder(res.Body).Decode(&page); err != nil {
 		t.Fatalf("Decode() error = %v", err)
@@ -154,7 +154,7 @@ func TestPathQueryLongCursorHTTP(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Marshal() error = %v", err)
 	}
-	res = sendRequest(t, server, queryMethod, "/deep", string(body), "application/json")
+	res = sendRequest(t, server, queryMethod, "/db/deep", string(body), "application/json")
 	checkResponse(t, res, http.StatusOK, `{"documents":["`+secondID+`"],"cursor":""}`)
 }
 
@@ -162,15 +162,15 @@ func TestPathQueryLimitsHTTP(t *testing.T) {
 	t.Parallel()
 
 	server := newTestServer(t, defaultMaxBodyBytes)
-	res := sendRequest(t, server, http.MethodPost, "/", `{"name":"users"}`, "application/json")
+	res := sendRequest(t, server, http.MethodPost, "/db", `{"name":"users"}`, "application/json")
 	checkResponse(t, res, http.StatusCreated, `{"name":"users"}`)
 
 	body := `{"path":"$` + strings.Repeat(".a", maxQueryPath) + `","value":1}`
-	res = sendRequest(t, server, queryMethod, "/users", body, "application/json")
+	res = sendRequest(t, server, queryMethod, "/db/users", body, "application/json")
 	checkResponse(t, res, http.StatusBadRequest, `{"error":{"code":"invalid_query","message":"Path is invalid"}}`)
 
 	body = `{"path":"$","value":null}` + strings.Repeat(" ", maxQueryBody)
-	res = sendRequest(t, server, queryMethod, "/users", body, "application/json")
+	res = sendRequest(t, server, queryMethod, "/db/users", body, "application/json")
 	checkResponse(t, res, http.StatusRequestEntityTooLarge, `{"error":{"code":"content_too_large","message":"Request body exceeds the size limit"}}`)
 }
 
@@ -178,7 +178,7 @@ func TestPathQueryContractHTTP(t *testing.T) {
 	t.Parallel()
 
 	server := newTestServer(t, 256)
-	res := sendRequest(t, server, http.MethodPost, "/", `{"name":"users"}`, "application/json")
+	res := sendRequest(t, server, http.MethodPost, "/db", `{"name":"users"}`, "application/json")
 	checkResponse(t, res, http.StatusCreated, `{"name":"users"}`)
 
 	tests := []struct {
@@ -189,26 +189,26 @@ func TestPathQueryContractHTTP(t *testing.T) {
 		status      int
 		code        string
 	}{
-		{name: "URI query", path: "/users?limit=1", body: `{"path":"$","value":null}`, contentType: "application/json", status: http.StatusBadRequest, code: "invalid_query"},
-		{name: "missing content type", path: "/users", body: `{"path":"$","value":null}`, status: http.StatusUnsupportedMediaType, code: "unsupported_media_type"},
-		{name: "wrong content type", path: "/users", body: `{"path":"$","value":null}`, contentType: "text/plain", status: http.StatusUnsupportedMediaType, code: "unsupported_media_type"},
-		{name: "empty body", path: "/users", contentType: "application/json", status: http.StatusBadRequest, code: "invalid_query"},
-		{name: "array body", path: "/users", body: `[]`, contentType: "application/json", status: http.StatusBadRequest, code: "invalid_query"},
-		{name: "missing path", path: "/users", body: `{"value":1}`, contentType: "application/json", status: http.StatusBadRequest, code: "invalid_query"},
-		{name: "missing value", path: "/users", body: `{"path":"$.age"}`, contentType: "application/json", status: http.StatusBadRequest, code: "invalid_query"},
-		{name: "unknown field", path: "/users", body: `{"path":"$.age","value":1,"extra":true}`, contentType: "application/json", status: http.StatusBadRequest, code: "invalid_query"},
-		{name: "duplicate field", path: "/users", body: `{"path":"$.age","path":"$.name","value":1}`, contentType: "application/json", status: http.StatusBadRequest, code: "invalid_query"},
-		{name: "trailing JSON", path: "/users", body: `{"path":"$.age","value":1}{}`, contentType: "application/json", status: http.StatusBadRequest, code: "invalid_query"},
-		{name: "compound value", path: "/users", body: `{"path":"$.age","value":[]}`, contentType: "application/json", status: http.StatusBadRequest, code: "invalid_query"},
-		{name: "bad operator", path: "/users", body: `{"path":"$.age","op":"ne","value":1}`, contentType: "application/json", status: http.StatusBadRequest, code: "invalid_query"},
-		{name: "ordered boolean", path: "/users", body: `{"path":"$.age","op":"gt","value":true}`, contentType: "application/json", status: http.StatusBadRequest, code: "invalid_query"},
-		{name: "bad limit", path: "/users", body: `{"path":"$.age","value":1,"limit":0}`, contentType: "application/json", status: http.StatusBadRequest, code: "invalid_query"},
-		{name: "bad cursor", path: "/users", body: `{"path":"$.age","value":1,"cursor":"bad"}`, contentType: "application/json", status: http.StatusBadRequest, code: "invalid_cursor"},
-		{name: "invalid path", path: "/users", body: `{"path":"age","value":1}`, contentType: "application/json", status: http.StatusBadRequest, code: "invalid_query"},
-		{name: "expanding path", path: "/users", body: `{"path":"$..*..*","value":1}`, contentType: "application/json", status: http.StatusBadRequest, code: "invalid_query"},
-		{name: "union path", path: "/users", body: `{"path":"$['a','a']","value":1}`, contentType: "application/json", status: http.StatusBadRequest, code: "invalid_query"},
-		{name: "missing database", path: "/missing", body: `{"path":"$.age","value":1}`, contentType: "application/json", status: http.StatusNotFound, code: "database_not_found"},
-		{name: "body too large", path: "/users", body: strings.Repeat(" ", 257), contentType: "application/json", status: http.StatusRequestEntityTooLarge, code: "content_too_large"},
+		{name: "URI query", path: "/db/users?limit=1", body: `{"path":"$","value":null}`, contentType: "application/json", status: http.StatusBadRequest, code: "invalid_query"},
+		{name: "missing content type", path: "/db/users", body: `{"path":"$","value":null}`, status: http.StatusUnsupportedMediaType, code: "unsupported_media_type"},
+		{name: "wrong content type", path: "/db/users", body: `{"path":"$","value":null}`, contentType: "text/plain", status: http.StatusUnsupportedMediaType, code: "unsupported_media_type"},
+		{name: "empty body", path: "/db/users", contentType: "application/json", status: http.StatusBadRequest, code: "invalid_query"},
+		{name: "array body", path: "/db/users", body: `[]`, contentType: "application/json", status: http.StatusBadRequest, code: "invalid_query"},
+		{name: "missing path", path: "/db/users", body: `{"value":1}`, contentType: "application/json", status: http.StatusBadRequest, code: "invalid_query"},
+		{name: "missing value", path: "/db/users", body: `{"path":"$.age"}`, contentType: "application/json", status: http.StatusBadRequest, code: "invalid_query"},
+		{name: "unknown field", path: "/db/users", body: `{"path":"$.age","value":1,"extra":true}`, contentType: "application/json", status: http.StatusBadRequest, code: "invalid_query"},
+		{name: "duplicate field", path: "/db/users", body: `{"path":"$.age","path":"$.name","value":1}`, contentType: "application/json", status: http.StatusBadRequest, code: "invalid_query"},
+		{name: "trailing JSON", path: "/db/users", body: `{"path":"$.age","value":1}{}`, contentType: "application/json", status: http.StatusBadRequest, code: "invalid_query"},
+		{name: "compound value", path: "/db/users", body: `{"path":"$.age","value":[]}`, contentType: "application/json", status: http.StatusBadRequest, code: "invalid_query"},
+		{name: "bad operator", path: "/db/users", body: `{"path":"$.age","op":"ne","value":1}`, contentType: "application/json", status: http.StatusBadRequest, code: "invalid_query"},
+		{name: "ordered boolean", path: "/db/users", body: `{"path":"$.age","op":"gt","value":true}`, contentType: "application/json", status: http.StatusBadRequest, code: "invalid_query"},
+		{name: "bad limit", path: "/db/users", body: `{"path":"$.age","value":1,"limit":0}`, contentType: "application/json", status: http.StatusBadRequest, code: "invalid_query"},
+		{name: "bad cursor", path: "/db/users", body: `{"path":"$.age","value":1,"cursor":"bad"}`, contentType: "application/json", status: http.StatusBadRequest, code: "invalid_cursor"},
+		{name: "invalid path", path: "/db/users", body: `{"path":"age","value":1}`, contentType: "application/json", status: http.StatusBadRequest, code: "invalid_query"},
+		{name: "expanding path", path: "/db/users", body: `{"path":"$..*..*","value":1}`, contentType: "application/json", status: http.StatusBadRequest, code: "invalid_query"},
+		{name: "union path", path: "/db/users", body: `{"path":"$['a','a']","value":1}`, contentType: "application/json", status: http.StatusBadRequest, code: "invalid_query"},
+		{name: "missing database", path: "/db/missing", body: `{"path":"$.age","value":1}`, contentType: "application/json", status: http.StatusNotFound, code: "database_not_found"},
+		{name: "body too large", path: "/db/users", body: strings.Repeat(" ", 257), contentType: "application/json", status: http.StatusRequestEntityTooLarge, code: "content_too_large"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

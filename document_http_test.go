@@ -13,10 +13,10 @@ func TestDocumentLifecycleHTTP(t *testing.T) {
 	t.Parallel()
 
 	server := newTestServer(t, defaultMaxBodyBytes)
-	res := sendRequest(t, server, http.MethodPost, "/", `{"name":"db"}`, "application/json")
-	checkResponse(t, res, http.StatusCreated, `{"name":"db"}`)
+	res := sendRequest(t, server, http.MethodPost, "/db", `{"name":"dbname"}`, "application/json")
+	checkResponse(t, res, http.StatusCreated, `{"name":"dbname"}`)
 
-	res = sendRequest(t, server, http.MethodPost, "/db", ` { "z": 1, "a": true } `, "application/json; charset=utf-8")
+	res = sendRequest(t, server, http.MethodPost, "/db/dbname", ` { "z": 1, "a": true } `, "application/json; charset=utf-8")
 	if res.StatusCode != http.StatusCreated {
 		t.Fatalf("status = %d, want %d; body = %s", res.StatusCode, http.StatusCreated, readResponse(t, res))
 	}
@@ -34,11 +34,11 @@ func TestDocumentLifecycleHTTP(t *testing.T) {
 	if err := validateID(created.ID); err != nil {
 		t.Errorf("created ID = %q: %v", created.ID, err)
 	}
-	if got, want := res.Header.Get("Location"), "/db/"+created.ID; got != want {
+	if got, want := res.Header.Get("Location"), "/db/dbname/"+created.ID; got != want {
 		t.Errorf("Location = %q, want %q", got, want)
 	}
 
-	res = sendRequest(t, server, http.MethodGet, "/db/"+created.ID, "", "")
+	res = sendRequest(t, server, http.MethodGet, "/db/dbname/"+created.ID, "", "")
 	if got := res.Header.Get("Content-Type"); got != "application/json" {
 		t.Errorf("Content-Type = %q, want application/json", got)
 	}
@@ -47,10 +47,10 @@ func TestDocumentLifecycleHTTP(t *testing.T) {
 	}
 	checkResponse(t, res, http.StatusOK, `{"a":true,"z":1}`)
 
-	res = sendRequest(t, server, http.MethodDelete, "/db/"+created.ID, "", "")
+	res = sendRequest(t, server, http.MethodDelete, "/db/dbname/"+created.ID, "", "")
 	checkResponse(t, res, http.StatusNoContent, "")
 
-	res = sendRequest(t, server, http.MethodGet, "/db/"+created.ID, "", "")
+	res = sendRequest(t, server, http.MethodGet, "/db/dbname/"+created.ID, "", "")
 	checkResponse(t, res, http.StatusNotFound, `{"error":{"code":"document_not_found","message":"Document does not exist"}}`)
 }
 
@@ -58,15 +58,15 @@ func TestListDocumentsHTTP(t *testing.T) {
 	t.Parallel()
 
 	server := newTestServer(t, defaultMaxBodyBytes)
-	res := sendRequest(t, server, http.MethodPost, "/", `{"name":"db"}`, "application/json")
-	checkResponse(t, res, http.StatusCreated, `{"name":"db"}`)
+	res := sendRequest(t, server, http.MethodPost, "/db", `{"name":"dbname"}`, "application/json")
+	checkResponse(t, res, http.StatusCreated, `{"name":"dbname"}`)
 
-	res = sendRequest(t, server, http.MethodGet, "/db", "", "")
+	res = sendRequest(t, server, http.MethodGet, "/db/dbname", "", "")
 	checkResponse(t, res, http.StatusOK, `{"documents":[],"cursor":""}`)
 
 	var ids []string
 	for range 3 {
-		res = sendRequest(t, server, http.MethodPost, "/db", `{}`, "application/json")
+		res = sendRequest(t, server, http.MethodPost, "/db/dbname", `{}`, "application/json")
 		if res.StatusCode != http.StatusCreated {
 			t.Fatalf("status = %d, want %d; body = %s", res.StatusCode, http.StatusCreated, readResponse(t, res))
 		}
@@ -82,7 +82,7 @@ func TestListDocumentsHTTP(t *testing.T) {
 	}
 	slices.Sort(ids)
 
-	res = sendRequest(t, server, http.MethodGet, "/db?limit=2", "", "")
+	res = sendRequest(t, server, http.MethodGet, "/db/dbname?limit=2", "", "")
 	var page docList
 	if err := json.NewDecoder(res.Body).Decode(&page); err != nil {
 		t.Fatalf("Decode() error = %v", err)
@@ -97,7 +97,7 @@ func TestListDocumentsHTTP(t *testing.T) {
 		t.Errorf("cursor = %q, want %q", page.Cursor, ids[1])
 	}
 
-	res = sendRequest(t, server, http.MethodGet, "/db?limit=1&cursor="+ids[1], "", "")
+	res = sendRequest(t, server, http.MethodGet, "/db/dbname?limit=1&cursor="+ids[1], "", "")
 	page = docList{}
 	if err := json.NewDecoder(res.Body).Decode(&page); err != nil {
 		t.Fatalf("Decode() error = %v", err)
@@ -112,7 +112,7 @@ func TestListDocumentsHTTP(t *testing.T) {
 		t.Errorf("final cursor = %q, want empty", page.Cursor)
 	}
 
-	res = sendRequest(t, server, http.MethodGet, "/db?cursor="+ids[2], "", "")
+	res = sendRequest(t, server, http.MethodGet, "/db/dbname?cursor="+ids[2], "", "")
 	checkResponse(t, res, http.StatusOK, `{"documents":[],"cursor":""}`)
 }
 
@@ -120,21 +120,21 @@ func TestListDocumentsValidationHTTP(t *testing.T) {
 	t.Parallel()
 
 	server := newTestServer(t, defaultMaxBodyBytes)
-	res := sendRequest(t, server, http.MethodPost, "/", `{"name":"db"}`, "application/json")
-	checkResponse(t, res, http.StatusCreated, `{"name":"db"}`)
+	res := sendRequest(t, server, http.MethodPost, "/db", `{"name":"dbname"}`, "application/json")
+	checkResponse(t, res, http.StatusCreated, `{"name":"dbname"}`)
 
 	tests := []struct {
 		path string
 		code string
 	}{
-		{path: "/db?limit=", code: "invalid_limit"},
-		{path: "/db?limit=0", code: "invalid_limit"},
-		{path: "/db?limit=1001", code: "invalid_limit"},
-		{path: "/db?limit=none", code: "invalid_limit"},
-		{path: "/db?cursor=bad", code: "invalid_cursor"},
-		{path: "/db?unknown=true", code: "invalid_query"},
-		{path: "/db?limit=1&limit=2", code: "invalid_query"},
-		{path: "/db?cursor=&cursor=", code: "invalid_query"},
+		{path: "/db/dbname?limit=", code: "invalid_limit"},
+		{path: "/db/dbname?limit=0", code: "invalid_limit"},
+		{path: "/db/dbname?limit=1001", code: "invalid_limit"},
+		{path: "/db/dbname?limit=none", code: "invalid_limit"},
+		{path: "/db/dbname?cursor=bad", code: "invalid_cursor"},
+		{path: "/db/dbname?unknown=true", code: "invalid_query"},
+		{path: "/db/dbname?limit=1&limit=2", code: "invalid_query"},
+		{path: "/db/dbname?cursor=&cursor=", code: "invalid_query"},
 	}
 	for _, tt := range tests {
 		res = sendRequest(t, server, http.MethodGet, tt.path, "", "")
@@ -147,10 +147,10 @@ func TestListDocumentsValidationHTTP(t *testing.T) {
 		}
 	}
 
-	res = sendRequest(t, server, http.MethodGet, "/Bad", "", "")
+	res = sendRequest(t, server, http.MethodGet, "/db/Bad", "", "")
 	checkResponse(t, res, http.StatusBadRequest, `{"error":{"code":"invalid_name","message":"Database name is invalid"}}`)
 
-	res = sendRequest(t, server, http.MethodGet, "/missing", "", "")
+	res = sendRequest(t, server, http.MethodGet, "/db/missing", "", "")
 	checkResponse(t, res, http.StatusNotFound, `{"error":{"code":"database_not_found","message":"Database does not exist"}}`)
 }
 
@@ -158,21 +158,21 @@ func TestOversizedIndexedValueHTTP(t *testing.T) {
 	t.Parallel()
 
 	server := newTestServer(t, defaultMaxBodyBytes)
-	res := sendRequest(t, server, http.MethodPost, "/", `{"name":"db","indexes":[{"name":"value","path":"/value"}]}`, "application/json")
-	checkResponse(t, res, http.StatusCreated, `{"name":"db","indexes":[{"name":"value","path":"/value"}]}`)
+	res := sendRequest(t, server, http.MethodPost, "/db", `{"name":"dbname","indexes":[{"name":"value","path":"/value"}]}`, "application/json")
+	checkResponse(t, res, http.StatusCreated, `{"name":"dbname","indexes":[{"name":"value","path":"/value"}]}`)
 
 	large := `{"value":"` + strings.Repeat("x", maxIndexValue) + `"}`
-	res = sendRequest(t, server, http.MethodPost, "/db", large, "application/json")
+	res = sendRequest(t, server, http.MethodPost, "/db/dbname", large, "application/json")
 	checkResponse(t, res, http.StatusBadRequest, `{"error":{"code":"invalid_document","message":"An indexed value exceeds the size limit"}}`)
 
-	id := createQueryDoc(t, server, "/db", `{"value":"ok"}`)
-	res = sendRequest(t, server, http.MethodPut, "/db/"+id, large, "application/json")
+	id := createQueryDoc(t, server, "/db/dbname", `{"value":"ok"}`)
+	res = sendRequest(t, server, http.MethodPut, "/db/dbname/"+id, large, "application/json")
 	checkResponse(t, res, http.StatusBadRequest, `{"error":{"code":"invalid_document","message":"An indexed value exceeds the size limit"}}`)
 
-	res = sendRequest(t, server, http.MethodPatch, "/db/"+id, large, "application/merge-patch+json")
+	res = sendRequest(t, server, http.MethodPatch, "/db/dbname/"+id, large, "application/merge-patch+json")
 	checkResponse(t, res, http.StatusBadRequest, `{"error":{"code":"invalid_patch","message":"An indexed value exceeds the size limit"}}`)
 
-	res = sendRequest(t, server, http.MethodGet, "/db/"+id, "", "")
+	res = sendRequest(t, server, http.MethodGet, "/db/dbname/"+id, "", "")
 	checkResponse(t, res, http.StatusOK, `{"value":"ok"}`)
 }
 
@@ -191,8 +191,8 @@ func TestCreateDocumentValidationHTTP(t *testing.T) {
 		{name: "wrong content type", body: `{}`, contentType: "text/plain", maxBytes: 100, status: http.StatusUnsupportedMediaType, code: "unsupported_media_type"},
 		{name: "malformed JSON", body: `{"open":`, contentType: "application/json", maxBytes: 100, status: http.StatusBadRequest, code: "invalid_document"},
 		{name: "array", body: `[]`, contentType: "application/json", maxBytes: 100, status: http.StatusBadRequest, code: "invalid_document"},
-		{name: "body too large", body: strings.Repeat("x", 14), contentType: "application/json", maxBytes: 13, status: http.StatusRequestEntityTooLarge, code: "content_too_large"},
-		{name: "document too large", body: `{"x":"<"}`, contentType: "application/json", maxBytes: 13, status: http.StatusRequestEntityTooLarge, code: "content_too_large"},
+		{name: "body too large", body: strings.Repeat("x", 18), contentType: "application/json", maxBytes: 17, status: http.StatusRequestEntityTooLarge, code: "content_too_large"},
+		{name: "document too large", body: `{"x":"<><"}`, contentType: "application/json", maxBytes: 17, status: http.StatusRequestEntityTooLarge, code: "content_too_large"},
 	}
 
 	for _, tt := range tests {
@@ -200,10 +200,10 @@ func TestCreateDocumentValidationHTTP(t *testing.T) {
 			t.Parallel()
 
 			server := newTestServer(t, tt.maxBytes)
-			res := sendRequest(t, server, http.MethodPost, "/", `{"name":"db"}`, "application/json")
-			checkResponse(t, res, http.StatusCreated, `{"name":"db"}`)
+			res := sendRequest(t, server, http.MethodPost, "/db", `{"name":"dbname"}`, "application/json")
+			checkResponse(t, res, http.StatusCreated, `{"name":"dbname"}`)
 
-			res = sendRequest(t, server, http.MethodPost, "/db", tt.body, tt.contentType)
+			res = sendRequest(t, server, http.MethodPost, "/db/dbname", tt.body, tt.contentType)
 			body := readResponse(t, res)
 			if res.StatusCode != tt.status {
 				t.Errorf("status = %d, want %d; body = %s", res.StatusCode, tt.status, body)
@@ -221,16 +221,16 @@ func TestDocumentMissingResourcesAndPathsHTTP(t *testing.T) {
 	server := newTestServer(t, defaultMaxBodyBytes)
 	id := "01950000-0000-7000-8000-000000000001"
 
-	res := sendRequest(t, server, http.MethodPost, "/missing", `{}`, "application/json")
+	res := sendRequest(t, server, http.MethodPost, "/db/missing", `{}`, "application/json")
 	checkResponse(t, res, http.StatusNotFound, `{"error":{"code":"database_not_found","message":"Database does not exist"}}`)
 
-	res = sendRequest(t, server, http.MethodGet, "/missing/"+id, "", "")
+	res = sendRequest(t, server, http.MethodGet, "/db/missing/"+id, "", "")
 	checkResponse(t, res, http.StatusNotFound, `{"error":{"code":"document_not_found","message":"Document does not exist"}}`)
 
-	res = sendRequest(t, server, http.MethodDelete, "/missing/not-an-id", "", "")
+	res = sendRequest(t, server, http.MethodDelete, "/db/missing/not-an-id", "", "")
 	checkResponse(t, res, http.StatusBadRequest, `{"error":{"code":"invalid_id","message":"Document ID is invalid"}}`)
 
-	res = sendRequest(t, server, http.MethodGet, "/Bad/"+id, "", "")
+	res = sendRequest(t, server, http.MethodGet, "/db/Bad/"+id, "", "")
 	checkResponse(t, res, http.StatusBadRequest, `{"error":{"code":"invalid_name","message":"Database name is invalid"}}`)
 }
 
@@ -263,9 +263,9 @@ func TestHTTPDurabilityAcrossRestarts(t *testing.T) {
 	}()
 
 	start()
-	res := sendRequest(t, server, http.MethodPost, "/", `{"name":"db"}`, "application/json")
-	checkResponse(t, res, http.StatusCreated, `{"name":"db"}`)
-	res = sendRequest(t, server, http.MethodPost, "/db", `{"stage":"created"}`, "application/json")
+	res := sendRequest(t, server, http.MethodPost, "/db", `{"name":"dbname"}`, "application/json")
+	checkResponse(t, res, http.StatusCreated, `{"name":"dbname"}`)
+	res = sendRequest(t, server, http.MethodPost, "/db/dbname", `{"stage":"created"}`, "application/json")
 	if res.StatusCode != http.StatusCreated {
 		t.Fatalf("status = %d, want %d; body = %s", res.StatusCode, http.StatusCreated, readResponse(t, res))
 	}
@@ -277,7 +277,7 @@ func TestHTTPDurabilityAcrossRestarts(t *testing.T) {
 	if err := res.Body.Close(); err != nil {
 		t.Errorf("Response.Body.Close() error = %v", err)
 	}
-	docPath := "/db/" + created.ID
+	docPath := "/db/dbname/" + created.ID
 	stop()
 
 	start()
@@ -315,11 +315,11 @@ func TestHTTPDurabilityAcrossRestarts(t *testing.T) {
 	start()
 	res = sendRequest(t, server, http.MethodGet, docPath, "", "")
 	checkResponse(t, res, http.StatusNotFound, `{"error":{"code":"document_not_found","message":"Document does not exist"}}`)
-	res = sendRequest(t, server, http.MethodDelete, "/db", "", "")
+	res = sendRequest(t, server, http.MethodDelete, "/db/dbname", "", "")
 	checkResponse(t, res, http.StatusNoContent, "")
 	stop()
 
 	start()
-	res = sendRequest(t, server, http.MethodGet, "/", "", "")
+	res = sendRequest(t, server, http.MethodGet, "/db", "", "")
 	checkResponse(t, res, http.StatusOK, `{"databases":[]}`)
 }

@@ -16,19 +16,22 @@ func TestRoutingErrorsUseEnvelope(t *testing.T) {
 
 	server := newTestServer(t, defaultMaxBodyBytes)
 
-	res := sendRequest(t, server, http.MethodGet, "/missing/route/extra", "", "")
+	res := sendRequest(t, server, http.MethodGet, "/db/missing/route/extra", "", "")
 	checkResponse(t, res, http.StatusNotFound, `{"error":{"code":"route_not_found","message":"Route does not exist"}}`)
 
-	res = sendRequest(t, server, http.MethodPatch, "/", "", "")
+	res = sendRequest(t, server, http.MethodPost, "/", "", "")
 	checkResponse(t, res, http.StatusMethodNotAllowed, `{"error":{"code":"method_not_allowed","message":"Method is not allowed"}}`)
+
+	res = sendRequest(t, server, http.MethodGet, "/users", "", "")
+	checkResponse(t, res, http.StatusNotFound, `{"error":{"code":"route_not_found","message":"Route does not exist"}}`)
 }
 
 func TestTrailingSlashRedirects(t *testing.T) {
 	t.Parallel()
 
 	server := newTestServer(t, defaultMaxBodyBytes)
-	res := sendRequest(t, server, http.MethodPost, "/", `{"name":"db"}`, "application/json")
-	checkResponse(t, res, http.StatusCreated, `{"name":"db"}`)
+	res := sendRequest(t, server, http.MethodPost, "/db", `{"name":"dbname"}`, "application/json")
+	checkResponse(t, res, http.StatusCreated, `{"name":"dbname"}`)
 
 	client := *server.Client()
 	client.CheckRedirect = func(*http.Request, []*http.Request) error {
@@ -44,7 +47,8 @@ func TestTrailingSlashRedirects(t *testing.T) {
 	}{
 		{method: http.MethodGet, path: "/healthz/", status: http.StatusMovedPermanently, location: "/healthz"},
 		{method: http.MethodGet, path: "/db/", status: http.StatusMovedPermanently, location: "/db"},
-		{method: http.MethodPost, path: "/db/", body: `{}`, status: http.StatusTemporaryRedirect, location: "/db"},
+		{method: http.MethodGet, path: "/db/dbname/", status: http.StatusMovedPermanently, location: "/db/dbname"},
+		{method: http.MethodPost, path: "/db/dbname/", body: `{}`, status: http.StatusTemporaryRedirect, location: "/db/dbname"},
 	}
 	for _, tt := range tests {
 		req, err := http.NewRequestWithContext(t.Context(), tt.method, server.URL+tt.path, strings.NewReader(tt.body))
@@ -68,7 +72,7 @@ func TestTrailingSlashRedirects(t *testing.T) {
 		_ = readResponse(t, res)
 	}
 
-	res = sendRequest(t, server, http.MethodPost, "/db/", `{"redirected":true}`, "application/json")
+	res = sendRequest(t, server, http.MethodPost, "/db/dbname/", `{"redirected":true}`, "application/json")
 	if res.StatusCode != http.StatusCreated {
 		t.Errorf("redirected POST status = %d, want %d", res.StatusCode, http.StatusCreated)
 	}
@@ -99,11 +103,11 @@ func TestCorruptionIsMappedAndLogged(t *testing.T) {
 	t.Parallel()
 
 	store := testStore(t)
-	if err := store.createDB("db"); err != nil {
+	if err := store.createDB("dbname"); err != nil {
 		t.Fatalf("createDB() error = %v", err)
 	}
 	id := "01950000-0000-7000-8000-000000000001"
-	if err := store.db.Set(docKey("db", id), []byte{0xff}, pebble.Sync); err != nil {
+	if err := store.db.Set(docKey("dbname", id), []byte{0xff}, pebble.Sync); err != nil {
 		t.Fatalf("DB.Set() error = %v", err)
 	}
 
@@ -112,13 +116,13 @@ func TestCorruptionIsMappedAndLogged(t *testing.T) {
 	server := httptest.NewServer(newAPI(store, defaultMaxBodyBytes, log).handler())
 	t.Cleanup(server.Close)
 
-	res := sendRequest(t, server, http.MethodGet, "/db", "", "")
+	res := sendRequest(t, server, http.MethodGet, "/db/dbname", "", "")
 	checkResponse(t, res, http.StatusInternalServerError, `{"error":{"code":"corrupt_data","message":"Stored data is corrupt"}}`)
 	if !strings.Contains(logs.String(), `"operation":"list documents"`) {
 		t.Errorf("list log = %s", logs.String())
 	}
 
-	res = sendRequest(t, server, http.MethodGet, "/db/"+id, "", "")
+	res = sendRequest(t, server, http.MethodGet, "/db/dbname/"+id, "", "")
 	body := readResponse(t, res)
 	if res.StatusCode != http.StatusInternalServerError {
 		t.Errorf("status = %d, want %d", res.StatusCode, http.StatusInternalServerError)
@@ -149,9 +153,9 @@ func TestClosedStorageReturnsUnavailable(t *testing.T) {
 	t.Cleanup(server.Close)
 	id := "01950000-0000-7000-8000-000000000001"
 
-	res := sendRequest(t, server, http.MethodGet, "/db", "", "")
+	res := sendRequest(t, server, http.MethodGet, "/db/dbname", "", "")
 	checkResponse(t, res, http.StatusServiceUnavailable, `{"error":{"code":"service_unavailable","message":"Service is unavailable"}}`)
 
-	res = sendRequest(t, server, http.MethodGet, "/db/"+id, "", "")
+	res = sendRequest(t, server, http.MethodGet, "/db/dbname/"+id, "", "")
 	checkResponse(t, res, http.StatusServiceUnavailable, `{"error":{"code":"service_unavailable","message":"Service is unavailable"}}`)
 }

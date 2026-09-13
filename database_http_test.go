@@ -13,31 +13,31 @@ func TestDatabaseLifecycleHTTP(t *testing.T) {
 
 	server := newTestServer(t, defaultMaxBodyBytes)
 
-	res := sendRequest(t, server, http.MethodGet, "/", "", "")
+	res := sendRequest(t, server, http.MethodGet, "/db", "", "")
 	checkResponse(t, res, http.StatusOK, `{"databases":[]}`)
 
-	res = sendRequest(t, server, http.MethodPost, "/", `{"name":"beta"}`, "application/json; charset=utf-8")
-	if got := res.Header.Get("Location"); got != "/beta" {
-		t.Errorf("Location = %q, want %q", got, "/beta")
+	res = sendRequest(t, server, http.MethodPost, "/db", `{"name":"beta"}`, "application/json; charset=utf-8")
+	if got := res.Header.Get("Location"); got != "/db/beta" {
+		t.Errorf("Location = %q, want %q", got, "/db/beta")
 	}
 	checkResponse(t, res, http.StatusCreated, `{"name":"beta"}`)
 
-	res = sendRequest(t, server, http.MethodPost, "/", `{"name":"alpha"}`, "application/json")
+	res = sendRequest(t, server, http.MethodPost, "/db", `{"name":"alpha"}`, "application/json")
 	checkResponse(t, res, http.StatusCreated, `{"name":"alpha"}`)
 
-	res = sendRequest(t, server, http.MethodGet, "/", "", "")
+	res = sendRequest(t, server, http.MethodGet, "/db", "", "")
 	checkResponse(t, res, http.StatusOK, `{"databases":["alpha","beta"]}`)
 
-	res = sendRequest(t, server, http.MethodPost, "/", `{"name":"alpha"}`, "application/json")
+	res = sendRequest(t, server, http.MethodPost, "/db", `{"name":"alpha"}`, "application/json")
 	checkResponse(t, res, http.StatusConflict, `{"error":{"code":"database_exists","message":"Database already exists"}}`)
 
-	res = sendRequest(t, server, http.MethodDelete, "/alpha", "", "")
+	res = sendRequest(t, server, http.MethodDelete, "/db/alpha", "", "")
 	checkResponse(t, res, http.StatusNoContent, "")
 
-	res = sendRequest(t, server, http.MethodGet, "/", "", "")
+	res = sendRequest(t, server, http.MethodGet, "/db", "", "")
 	checkResponse(t, res, http.StatusOK, `{"databases":["beta"]}`)
 
-	res = sendRequest(t, server, http.MethodDelete, "/alpha", "", "")
+	res = sendRequest(t, server, http.MethodDelete, "/db/alpha", "", "")
 	checkResponse(t, res, http.StatusNotFound, `{"error":{"code":"database_not_found","message":"Database does not exist"}}`)
 }
 
@@ -57,11 +57,11 @@ func TestCreateDatabaseIndexesHTTP(t *testing.T) {
 	server := httptest.NewServer(newHandler(store, defaultMaxBodyBytes))
 	t.Cleanup(server.Close)
 
-	res := sendRequest(t, server, http.MethodPost, "/", `{"name":"empty","indexes":[]}`, "application/json")
+	res := sendRequest(t, server, http.MethodPost, "/db", `{"name":"empty","indexes":[]}`, "application/json")
 	checkResponse(t, res, http.StatusCreated, `{"name":"empty","indexes":[]}`)
 
 	body := `{"name":"users","indexes":[{"name":"email","path":"/email"},{"name":"active","path":"/active"}]}`
-	res = sendRequest(t, server, http.MethodPost, "/", body, "application/json")
+	res = sendRequest(t, server, http.MethodPost, "/db", body, "application/json")
 	checkResponse(t, res, http.StatusCreated, body)
 
 	defs, err := store.indexes("users")
@@ -78,17 +78,17 @@ func TestListDatabasesPaginationHTTP(t *testing.T) {
 
 	server := newTestServer(t, defaultMaxBodyBytes)
 	for _, name := range []string{"gamma", "alpha", "beta"} {
-		res := sendRequest(t, server, http.MethodPost, "/", `{"name":"`+name+`"}`, "application/json")
+		res := sendRequest(t, server, http.MethodPost, "/db", `{"name":"`+name+`"}`, "application/json")
 		checkResponse(t, res, http.StatusCreated, `{"name":"`+name+`"}`)
 	}
 
-	res := sendRequest(t, server, http.MethodGet, "/?limit=2", "", "")
+	res := sendRequest(t, server, http.MethodGet, "/db?limit=2", "", "")
 	checkResponse(t, res, http.StatusOK, `{"databases":["alpha","beta"]}`)
 
-	res = sendRequest(t, server, http.MethodGet, "/?limit=1&cursor=beta", "", "")
+	res = sendRequest(t, server, http.MethodGet, "/db?limit=1&cursor=beta", "", "")
 	checkResponse(t, res, http.StatusOK, `{"databases":["gamma"]}`)
 
-	res = sendRequest(t, server, http.MethodGet, "/?cursor=gamma", "", "")
+	res = sendRequest(t, server, http.MethodGet, "/db?cursor=gamma", "", "")
 	checkResponse(t, res, http.StatusOK, `{"databases":[]}`)
 }
 
@@ -100,11 +100,11 @@ func TestListDatabasesValidationHTTP(t *testing.T) {
 		path string
 		code string
 	}{
-		{path: "/?limit=", code: "invalid_limit"},
-		{path: "/?limit=0", code: "invalid_limit"},
-		{path: "/?limit=1001", code: "invalid_limit"},
-		{path: "/?limit=none", code: "invalid_limit"},
-		{path: "/?cursor=Bad", code: "invalid_cursor"},
+		{path: "/db?limit=", code: "invalid_limit"},
+		{path: "/db?limit=0", code: "invalid_limit"},
+		{path: "/db?limit=1001", code: "invalid_limit"},
+		{path: "/db?limit=none", code: "invalid_limit"},
+		{path: "/db?cursor=Bad", code: "invalid_cursor"},
 	}
 	for _, tt := range tests {
 		res := sendRequest(t, server, http.MethodGet, tt.path, "", "")
@@ -154,7 +154,7 @@ func TestCreateDatabaseValidationHTTP(t *testing.T) {
 			t.Parallel()
 
 			server := newTestServer(t, tt.maxBytes)
-			res := sendRequest(t, server, http.MethodPost, "/", tt.body, tt.contentType)
+			res := sendRequest(t, server, http.MethodPost, "/db", tt.body, tt.contentType)
 			body := readResponse(t, res)
 
 			if res.StatusCode != tt.status {
@@ -171,7 +171,7 @@ func TestDeleteDatabaseValidatesNameHTTP(t *testing.T) {
 	t.Parallel()
 
 	server := newTestServer(t, defaultMaxBodyBytes)
-	res := sendRequest(t, server, http.MethodDelete, "/Bad", "", "")
+	res := sendRequest(t, server, http.MethodDelete, "/db/Bad", "", "")
 	checkResponse(t, res, http.StatusBadRequest, `{"error":{"code":"invalid_name","message":"Database name is invalid"}}`)
 }
 

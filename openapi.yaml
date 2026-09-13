@@ -36,6 +36,26 @@ paths:
 
   /:
     get:
+      tags: [Service]
+      operationId: getServiceInfo
+      summary: Get service information
+      responses:
+        "200":
+          description: The service name and build version.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ServiceInfo"
+              example:
+                name: KantanDB
+                version: v0.1.0
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+
+  /db:
+    get:
       tags: [Databases]
       operationId: listDatabases
       summary: List databases
@@ -103,7 +123,7 @@ paths:
         "503":
           $ref: "#/components/responses/ServiceUnavailable"
 
-  /{database}:
+  /db/{database}:
     parameters:
       - $ref: "#/components/parameters/Database"
 
@@ -275,7 +295,7 @@ paths:
         "503":
           $ref: "#/components/responses/ServiceUnavailable"
 
-  /{database}/{id}:
+  /db/{database}/{id}:
     parameters:
       - $ref: "#/components/parameters/Database"
       - $ref: "#/components/parameters/DocumentID"
@@ -410,6 +430,18 @@ paths:
 
 components:
   schemas:
+    ServiceInfo:
+      type: object
+      additionalProperties: false
+      required: [name, version]
+      properties:
+        name:
+          type: string
+          const: KantanDB
+        version:
+          type: string
+          description: Release version, or Git revision for a development build.
+
     Health:
       type: object
       additionalProperties: false

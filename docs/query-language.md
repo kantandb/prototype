@@ -1,6 +1,6 @@
 # Query language
 
-Documents are queried with `GET /{database}` or `QUERY /{database}`. The response contains document IDs, not the document bodies:
+Documents are queried with `GET /db/{database}` or `QUERY /db/{database}`. The response contains document IDs, not the document bodies:
 
 ```json
 {
@@ -9,20 +9,20 @@ Documents are queried with `GET /{database}` or `QUERY /{database}`. The respons
 }
 ```
 
-Fetch a returned document with `GET /{database}/{id}`.
+Fetch a returned document with `GET /db/{database}/{id}`.
 
 ## Query forms
 
 There are three query forms:
 
 ```text
-GET /users
+GET /db/users
     List every document ID in users.
 
-GET /users?index=email&value=%22alice%40example.com%22
+GET /db/users?index=email&value=%22alice%40example.com%22
     Find IDs through the email secondary index.
 
-QUERY /users
+QUERY /db/users
 Content-Type: application/json
 
 {"path":"$.profile.age","op":"ge","value":18}
@@ -74,7 +74,7 @@ value=%22alice%40example.com%22
 With `curl`, `--data-urlencode` avoids manual encoding:
 
 ```sh
-curl --get http://localhost:8080/users \
+curl --get http://localhost:8080/db/users \
   --data index=email \
   --data-urlencode 'value="alice@example.com"'
 ```
@@ -98,19 +98,19 @@ JSONPath returns a list of nodes. A document matches a QUERY request when at lea
 ## Examples
 
 ```text
-GET /users?index=active&value=true
+GET /db/users?index=active&value=true
     Users whose indexed active field is true.
 
-GET /users?index=age&op=ge&value=18
+GET /db/users?index=age&op=ge&value=18
     Users whose indexed age is at least 18.
 
-GET /users?index=name&op=lt&value=%22m%22
+GET /db/users?index=name&op=lt&value=%22m%22
     Users whose indexed name sorts before "m".
 
-GET /users?limit=25
+GET /db/users?limit=25
     First 25 IDs without using a secondary index.
 
-QUERY /users
+QUERY /db/users
 {"path":"$.items[*].price","op":"lt","value":10,"limit":25}
     Users with any item priced below 10.
 ```
