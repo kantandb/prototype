@@ -1,6 +1,11 @@
 # KantanDB prototype
 
-Create a 256-bit master key, keep it outside the data directory, then start the server:
+KantanDB is an encrypted JSON document database with secondary indexes and
+JSONPath queries over HTTP.
+
+## Start the server
+
+Create a master key outside the data directory, then build and start KantanDB:
 
 ```sh
 openssl rand -base64 32 > kantan.key
@@ -9,15 +14,18 @@ mise run build
 ./kantan -addr :8080 -data data -key-file kantan.key -max-body-bytes 1048576
 ```
 
-`-key-file` is required. Its file must contain one base64-encoded 32-byte key. Losing the key makes the data unreadable. Using the wrong key or opening an older plaintext store fails at startup.
+The server requires a base64-encoded 32-byte key. Keep it safe: losing it makes
+the data unreadable. The server also refuses to start with the wrong key or an
+older plaintext store.
 
 ## HTTP API
 
-The [OpenAPI 3.2 contract](openapi.yaml) uses native `QUERY` operations. Consumers must support OpenAPI 3.2.
+The examples below use [`xh`](https://github.com/ducaale/xh). See the
+[OpenAPI contract](openapi.yaml) for complete request and response schemas.
+JSONPath queries use the HTTP `QUERY` method, so OpenAPI tooling must support
+version 3.2.
 
-Paths are canonical without a trailing slash. Trailing-slash variants redirect to the canonical path.
-
-### Examples
+### Usage examples
 
 ```sh
 # Show the service name and build version.
@@ -80,22 +88,28 @@ xh DELETE localhost:8080/db/example/01950000-0000-7000-8000-000000000001 If-Matc
 xh DELETE localhost:8080/db/example
 ```
 
-Index queries support `eq`, `lt`, `le`, `gt`, and `ge`. If `op` is omitted,
-`eq` is used. Equality accepts any JSON scalar. Ordering accepts numbers and
-strings. Types are not coerced; missing paths, objects, arrays, and values of a
-different type do not match. Number comparisons are exact. Strings use binary
-UTF-8 order.
+### Index queries
 
-Index queries read at most one page plus one extra valid index entry. Range
-results use indexed-value order, with document ID as the tie-breaker. Equality
-results remain in document ID order. Reuse the returned cursor with the same
-database, index, operator, and value.
+Index queries support `eq`, `lt`, `le`, `gt`, and `ge`; the default is `eq`.
+Equality works with any JSON scalar. Ordering works with numbers and strings.
+Types are not coerced, and missing paths, objects, arrays, or values of another
+type do not match. Numbers are compared exactly. Strings use binary UTF-8
+order.
 
-`QUERY /db/{database}` accepts RFC 9535 JSONPath in a JSON body. A document matches
-when any selected scalar satisfies the comparison. A simple path that matches a
-declared index uses that index unless it contains a numeric token; other paths
-scan documents in ID order. Each
-scan page examines at most 10,000 documents and runs for at most five seconds.
-The request body is limited to 64 KiB and the path to 256 bytes. Paths allow one
-descendant and one selector per segment; scan evaluation allows 1,000,000 JSON
-nodes per document.
+Range results are ordered by indexed value, then document ID. Equality results
+are ordered by document ID. Each query reads one page plus at most one extra
+valid index entry. To fetch the next page, reuse the returned cursor with the
+same database, index, operator, and value.
+
+### JSONPath queries
+
+Send an RFC 9535 JSONPath query in the body of `QUERY /db/{database}`. A document
+matches when any selected scalar satisfies the comparison.
+
+A simple path uses its declared index unless it contains a numeric token. Other
+paths scan documents in ID order. A scan examines no more than 10,000 documents
+per page and stops after five seconds.
+
+The request body is limited to 64 KiB and the path to 256 bytes. A path may have
+one descendant and one selector per segment. Evaluation visits at most 1,000,000
+JSON nodes per document.
