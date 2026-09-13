@@ -181,7 +181,7 @@ func (a *api) rejectStopping(c *gin.Context) {
 }
 
 func (a *api) welcome(c *gin.Context) {
-	c.JSON(http.StatusOK, serviceInfo{Name: "KantanDB", Version: version()})
+	c.JSON(http.StatusOK, serviceInfo{Name: "KantanDB", Version: buildVersion})
 }
 
 func (a *api) health(c *gin.Context) {

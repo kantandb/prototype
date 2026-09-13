@@ -27,7 +27,7 @@ func TestWelcome(t *testing.T) {
 	if res.Code != http.StatusOK {
 		t.Errorf("status = %d, want %d", res.Code, http.StatusOK)
 	}
-	want := fmt.Sprintf(`{"name":"KantanDB","version":%q}`, version())
+	want := fmt.Sprintf(`{"name":"KantanDB","version":%q}`, buildVersion)
 	if got := res.Body.String(); got != want {
 		t.Errorf("body = %q, want %q", got, want)
 	}

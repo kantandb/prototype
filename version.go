@@ -1,32 +1,23 @@
 package main
 
-import "runtime/debug"
-
 const unknownVersion = "unknown"
 
-var buildVersion string
+var (
+	releaseVersion string
+	gitSHA         string
+	buildVersion   string
+)
 
-func version() string {
-	info, ok := debug.ReadBuildInfo()
-
-	return resolveVersion(buildVersion, info, ok)
+func init() {
+	buildVersion = selectVersion(releaseVersion, gitSHA)
 }
 
-func resolveVersion(injected string, info *debug.BuildInfo, ok bool) string {
-	if injected != "" {
-		return injected
+func selectVersion(release, sha string) string {
+	if release != "" {
+		return release
 	}
-	if !ok {
-		return unknownVersion
-	}
-	if info.Main.Version != "" && info.Main.Version != "(devel)" {
-		return info.Main.Version
-	}
-
-	for _, setting := range info.Settings {
-		if setting.Key == "vcs.revision" && setting.Value != "" {
-			return setting.Value
-		}
+	if sha != "" {
+		return sha
 	}
 
 	return unknownVersion
